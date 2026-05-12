@@ -2,20 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-隔日T全市场选股策略 v1.0 bugfix
+A股隔日T选股系统 v1.1 bugfix
 
-本版只修复：
-1. 所属板块识别
-2. 热点标签识别
-3. 增加 output/sector_cache.csv 板块缓存
-4. 增加匹配统计日志
+本次只修复：
+1. 所属板块大量未知
+2. 热点标签大量未归类
 
-不修改原有选股逻辑：
-1. 最近5日振幅 > 10%
-2. 最近5日平均成交额 > 5亿
-3. 最新收盘价 > MA5
-4. 最近5日涨幅在 -5% 到 +20%
-5. 价格区间 30-50 元
+不修改：
+1. 选股逻辑
+2. 评分逻辑
+3. 价格筛选
+4. 成交额筛选
+5. 振幅筛选
 """
 
 from pathlib import Path
@@ -102,7 +100,7 @@ def calculate_score(
 ) -> float:
     """
     综合评分
-    保留原评分逻辑
+    保留原逻辑
     """
 
     score = 0
@@ -132,11 +130,11 @@ def calculate_score(
 
 def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    全市场扫描适合隔日T的股票
+    扫描隔日T候选股
 
     返回：
-        candidates_df: 候选股票
-        stock_df: 全市场股票列表，用于后续板块匹配
+        candidates_df: 候选股
+        stock_df: 全市场股票列表，用于板块缓存
     """
 
     result = []
@@ -156,10 +154,8 @@ def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame,
 
     stock_df["代码"] = stock_df["代码"].astype(str).str.zfill(6)
 
-    # 排除 ST
+    # 保留原过滤逻辑
     stock_df = stock_df[~stock_df["名称"].astype(str).str.contains("ST", na=False)]
-
-    # 排除北交所
     stock_df = stock_df[~stock_df["代码"].astype(str).str.startswith(("8", "9", "4"))]
 
     stock_list = stock_df[["代码", "名称"]].drop_duplicates()
@@ -204,7 +200,7 @@ def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame,
 
             close_price = float(last_5["收盘"].iloc[-1])
 
-            # 保留原价格筛选逻辑
+            # 保留原价格逻辑
             if close_price < MIN_PRICE or close_price > MAX_PRICE:
                 continue
 
@@ -226,7 +222,7 @@ def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame,
 
             rise_5d = (close_price - first_close) / first_close * 100
 
-            # 保留原筛选条件
+            # 保留原选股条件
             if amplitude_5d <= 10:
                 continue
 
@@ -257,11 +253,8 @@ def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame,
                 "股票代码": symbol,
                 "股票名称": name,
                 "所属市场": get_market_type(symbol),
-
-                # 先占位，后面由 sector_mapper.py 统一修复
                 "所属板块": "未知",
                 "热点标签": "未归类",
-
                 "最新收盘价": round(close_price, 2),
                 "MA5": round(ma5, 2),
                 "可买股数": buy_shares,
@@ -278,17 +271,16 @@ def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame,
 
         time.sleep(0.25)
 
-    result_df = pd.DataFrame(result)
+    candidates_df = pd.DataFrame(result)
 
-    if not result_df.empty:
-        result_df["股票代码"] = result_df["股票代码"].astype(str).str.zfill(6)
-
-        result_df = result_df.sort_values(
+    if not candidates_df.empty:
+        candidates_df["股票代码"] = candidates_df["股票代码"].astype(str).str.zfill(6)
+        candidates_df = candidates_df.sort_values(
             by="综合评分",
             ascending=False
         ).reset_index(drop=True)
 
-    return result_df, stock_df
+    return candidates_df, stock_df
 
 
 def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -312,9 +304,9 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
         "综合评分",
     ]
 
-    existing_columns = [col for col in columns if col in df.columns]
+    existing = [col for col in columns if col in df.columns]
 
-    return df[existing_columns]
+    return df[existing]
 
 
 if __name__ == "__main__":
