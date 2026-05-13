@@ -2,16 +2,17 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v1.7.1 Streamlit 页面
+A股隔日T选股系统 v1.8.2 Streamlit 页面
 
 功能：
 1. 展示候选池
 2. 展示尾盘确认结果
 3. 展示交易计划
-4. 展示次日验证
-5. 展示因子表现
-6. 展示因子登记表
-7. 支持一键运行完整流程
+4. 展示午盘验证
+5. 展示次日验证
+6. 展示因子表现
+7. 展示因子登记表
+8. 支持一键运行完整流程
 """
 
 from pathlib import Path
@@ -27,22 +28,21 @@ FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
 PLAN_FILE = Path("output/daily_plan.md")
 FACTOR_REGISTRY_FILE = Path("output/factor_registry.md")
 
+LUNCH_REVIEW_FILE = Path("output/lunch_review.csv")
+LUNCH_REVIEW_MD_FILE = Path("output/lunch_review.md")
+
 NEXT_DAY_REVIEW_FILE = Path("output/next_day_review.csv")
 NEXT_DAY_REVIEW_MD_FILE = Path("output/next_day_review.md")
 FACTOR_PERFORMANCE_FILE = Path("output/factor_performance.csv")
 
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v1.7.1",
+    page_title="A股隔日T选股系统 v1.8.2",
     layout="wide"
 )
 
 
 def run_script(script_name: str) -> bool:
-    """
-    执行指定 Python 脚本。
-    """
-
     try:
         result = subprocess.run(
             [sys.executable, script_name],
@@ -72,13 +72,12 @@ def run_script(script_name: str) -> bool:
 
 def run_full_pipeline() -> None:
     """
-    一键运行完整流程：
+    一键运行盘前/盘后主流程：
     1. 生成候选池
     2. 尾盘确认
     3. 生成交易计划
 
-    注意：
-    次日验证需要在次日行情出现后单独运行。
+    午盘验证、次日验证需要按时间单独运行。
     """
 
     steps = [
@@ -98,10 +97,6 @@ def run_full_pipeline() -> None:
 
 
 def load_csv(file_path: Path) -> pd.DataFrame:
-    """
-    读取 CSV 文件。
-    """
-
     if not file_path.exists():
         return pd.DataFrame()
 
@@ -122,10 +117,6 @@ def load_csv(file_path: Path) -> pd.DataFrame:
 
 
 def load_markdown(file_path: Path) -> str:
-    """
-    读取 Markdown 文件。
-    """
-
     if not file_path.exists():
         return ""
 
@@ -136,10 +127,6 @@ def load_markdown(file_path: Path) -> str:
 
 
 def sort_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    根据已有评分字段排序。
-    """
-
     if df.empty:
         return df
 
@@ -150,6 +137,8 @@ def sort_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "尾盘评分",
         "候选评分",
         "综合评分",
+        "上午最高涨幅",
+        "午盘涨幅",
         "次日最高涨幅",
         "次日收盘涨幅",
         "成功率",
@@ -174,7 +163,6 @@ def sort_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             df = df.sort_values("_grade_rank")
 
         df = df.drop(columns=["_grade_rank"])
-
         return df.reset_index(drop=True)
 
     if "买入优先级" in df.columns:
@@ -192,11 +180,13 @@ def sort_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             df = df.sort_values("_priority_rank")
 
         df = df.drop(columns=["_priority_rank"])
-
         return df.reset_index(drop=True)
 
     if "成功率" in df.columns:
         df = df.sort_values("成功率", ascending=False)
+
+    elif "上午最高涨幅" in df.columns:
+        df = df.sort_values("上午最高涨幅", ascending=False)
 
     elif "次日最高涨幅" in df.columns:
         df = df.sort_values("次日最高涨幅", ascending=False)
@@ -208,10 +198,6 @@ def sort_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def filter_dataframe(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
-    """
-    根据页面筛选条件过滤 DataFrame。
-    """
-
     if df.empty:
         return df
 
@@ -229,12 +215,17 @@ def filter_dataframe(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
         "是否触发-2%止损",
         "分时结构标签",
         "尾盘抢筹标签",
+        "上午结构标签",
+        "下午操作建议",
     ]:
         if col in filtered.columns:
             filter_cols.append(col)
 
     for col in filter_cols:
-        values = sorted([v for v in filtered[col].dropna().astype(str).unique().tolist() if v])
+        values = sorted([
+            v for v in filtered[col].dropna().astype(str).unique().tolist()
+            if v
+        ])
 
         selected = st.multiselect(
             f"{col}筛选",
@@ -249,12 +240,13 @@ def filter_dataframe(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     return filtered
 
 
-def show_metrics(candidate_df: pd.DataFrame, final_df: pd.DataFrame, review_df: pd.DataFrame) -> None:
-    """
-    顶部核心指标。
-    """
-
-    col1, col2, col3, col4, col5 = st.columns(5)
+def show_metrics(
+    candidate_df: pd.DataFrame,
+    final_df: pd.DataFrame,
+    lunch_df: pd.DataFrame,
+    review_df: pd.DataFrame,
+) -> None:
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     with col1:
         st.metric("候选池数量", len(candidate_df) if not candidate_df.empty else 0)
@@ -270,13 +262,16 @@ def show_metrics(candidate_df: pd.DataFrame, final_df: pd.DataFrame, review_df: 
         st.metric("A/B交易候选", trade_count)
 
     with col4:
+        st.metric("午盘验证数量", len(lunch_df) if not lunch_df.empty else 0)
+
+    with col5:
         if not final_df.empty and "最终评分" in final_df.columns:
             max_score = pd.to_numeric(final_df["最终评分"], errors="coerce").max()
             st.metric("最高最终评分", f"{max_score:.2f}" if pd.notna(max_score) else "-")
         else:
             st.metric("最高最终评分", "-")
 
-    with col5:
+    with col6:
         if not review_df.empty and "是否验证成功" in review_df.columns:
             success_rate = review_df["是否验证成功"].astype(str).eq("是").mean() * 100
             st.metric("验证成功率", f"{success_rate:.2f}%")
@@ -285,10 +280,6 @@ def show_metrics(candidate_df: pd.DataFrame, final_df: pd.DataFrame, review_df: 
 
 
 def show_dataframe_section(title: str, df: pd.DataFrame, key_prefix: str) -> None:
-    """
-    展示表格区块。
-    """
-
     st.subheader(title)
 
     if df.empty:
@@ -307,9 +298,9 @@ def show_dataframe_section(title: str, df: pd.DataFrame, key_prefix: str) -> Non
     )
 
 
-st.title("A股隔日T选股系统 v1.7.1")
+st.title("A股隔日T选股系统 v1.8.2")
 
-st.caption("流程：候选池 → 尾盘确认 → 交易计划 → 次日验证 → 因子表现")
+st.caption("流程：候选池 → 尾盘确认 → 交易计划 → 午盘验证 → 次日验证 → 因子表现")
 
 st.divider()
 
@@ -319,7 +310,7 @@ st.divider()
 
 st.subheader("操作区")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 with col1:
     if st.button("重新生成候选池", use_container_width=True):
@@ -337,12 +328,17 @@ with col3:
         st.rerun()
 
 with col4:
+    if st.button("午盘验证", use_container_width=True):
+        run_script("lunch_validator.py")
+        st.rerun()
+
+with col5:
     if st.button("次日验证", use_container_width=True):
         run_script("next_day_validator.py")
         st.rerun()
 
-with col5:
-    if st.button("一键全流程", use_container_width=True):
+with col6:
+    if st.button("一键主流程", use_container_width=True):
         run_full_pipeline()
         st.rerun()
 
@@ -354,14 +350,16 @@ st.divider()
 
 candidate_df = load_csv(CANDIDATE_FILE)
 final_df = load_csv(FINAL_WATCHLIST_FILE)
+lunch_review_df = load_csv(LUNCH_REVIEW_FILE)
 next_day_review_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_performance_df = load_csv(FACTOR_PERFORMANCE_FILE)
 
 daily_plan = load_markdown(PLAN_FILE)
 factor_registry_md = load_markdown(FACTOR_REGISTRY_FILE)
+lunch_review_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_day_review_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
 
-show_metrics(candidate_df, final_df, next_day_review_df)
+show_metrics(candidate_df, final_df, lunch_review_df, next_day_review_df)
 
 st.divider()
 
@@ -369,10 +367,11 @@ st.divider()
 # 页面 Tab
 # =========================
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "候选池",
     "尾盘确认",
     "交易计划",
+    "午盘验证",
     "次日验证",
     "因子表现",
     "因子登记",
@@ -401,6 +400,20 @@ with tab3:
         st.markdown(daily_plan)
 
 with tab4:
+    st.subheader("午盘验证报告：lunch_review.md")
+
+    if not lunch_review_md:
+        st.warning("暂未找到午盘验证报告：output/lunch_review.md")
+    else:
+        st.markdown(lunch_review_md)
+
+    show_dataframe_section(
+        title="午盘验证明细：lunch_review.csv",
+        df=lunch_review_df,
+        key_prefix="lunch_review",
+    )
+
+with tab5:
     st.subheader("次日验证报告：next_day_review.md")
 
     if not next_day_review_md:
@@ -414,14 +427,14 @@ with tab4:
         key_prefix="next_day_review",
     )
 
-with tab5:
+with tab6:
     show_dataframe_section(
         title="因子表现：factor_performance.csv",
         df=factor_performance_df,
         key_prefix="factor_performance",
     )
 
-with tab6:
+with tab7:
     st.subheader("因子登记表：factor_registry.md")
 
     if not factor_registry_md:
