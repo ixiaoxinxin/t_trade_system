@@ -2,25 +2,64 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T交易计划生成器 v1.3
+A股隔日T交易计划生成器 v1.6.3
 
-功能：
-1. 读取 output/overnight_t_candidates.csv
-2. 生成 output/daily_plan.md
-3. 新增主观察池
-4. 使用排他分组逻辑
-5. 使用动态止损
-6. 输出更接近实盘执行的交易计划
+目标：
+1. 优先读取尾盘确认结果 final_watchlist.csv
+2. 只允许 A/B 进入交易池
+3. C 进入观察池
+4. D 进入放弃池
+5. 如果没有 A/B，明确提示空仓
 """
 
 from pathlib import Path
 from datetime import datetime
 
 import pandas as pd
+import yaml
 
 
-INPUT_FILE = Path("output/overnight_t_candidates.csv")
+CONFIG_FILE = Path("config.yaml")
+
+FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
+CANDIDATES_FILE = Path("output/overnight_t_candidates.csv")
 OUTPUT_FILE = Path("output/daily_plan.md")
+
+
+def load_config() -> dict:
+    default_config = {
+        "capital": {
+            "single_stock_min": 3000,
+            "single_stock_max": 5000,
+            "max_trade_count": 2,
+        }
+    }
+
+    if not CONFIG_FILE.exists():
+        return default_config
+
+    try:
+        with CONFIG_FILE.open("r", encoding="utf-8") as f:
+            user_config = yaml.safe_load(f) or {}
+
+        for section, values in default_config.items():
+            if section not in user_config:
+                user_config[section] = values
+            else:
+                for key, value in values.items():
+                    user_config[section].setdefault(key, value)
+
+        return user_config
+
+    except Exception:
+        return default_config
+
+
+CONFIG = load_config()
+
+SINGLE_STOCK_MIN = float(CONFIG["capital"]["single_stock_min"])
+SINGLE_STOCK_MAX = float(CONFIG["capital"]["single_stock_max"])
+MAX_TRADE_COUNT = int(CONFIG["capital"]["max_trade_count"])
 
 
 def safe_float(value, default=0.0) -> float:
@@ -30,210 +69,181 @@ def safe_float(value, default=0.0) -> float:
         return default
 
 
-def format_price(value) -> str:
-    return f"{safe_float(value):.2f}"
-
-
 def normalize_code(code) -> str:
     return str(code).zfill(6)
 
 
-def is_unknown_tag(tag: str) -> bool:
-    tag = str(tag).strip()
-    return tag in ["", "未归类", "未分类", "未知", "未标记"]
+def format_price(value) -> str:
+    return f"{safe_float(value):.2f}"
 
 
-def get_ma5_deviation(row: pd.Series) -> float:
+def read_source_data() -> tuple[pd.DataFrame, str]:
     """
-    获取距MA5偏离率。
-    优先读取 v1.3 字段，否则自行计算。
+    优先读取 final_watchlist.csv。
+    如果不存在，则回退 overnight_t_candidates.csv。
     """
 
-    if "距MA5偏离率" in row.index:
-        return safe_float(row.get("距MA5偏离率", 0))
+    if FINAL_WATCHLIST_FILE.exists():
+        df = pd.read_csv(FINAL_WATCHLIST_FILE, dtype={"股票代码": str})
+        return df, str(FINAL_WATCHLIST_FILE)
 
-    close_price = safe_float(row.get("最新收盘价", 0))
+    if CANDIDATES_FILE.exists():
+        df = pd.read_csv(CANDIDATES_FILE, dtype={"股票代码": str})
+        return df, str(CANDIDATES_FILE)
+
+    raise FileNotFoundError("找不到 final_watchlist.csv 或 overnight_t_candidates.csv")
+
+
+def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    兼容不同版本字段。
+    """
+
+    df = df.copy()
+
+    df["股票代码"] = df["股票代码"].astype(str).str.zfill(6)
+
+    default_cols = {
+        "热点标签": "未归类",
+        "候选评分": 0,
+        "尾盘评分": 0,
+        "最终评分": df["综合评分"] if "综合评分" in df.columns else 0,
+        "隔夜建议等级": "C",
+        "隔夜建议说明": "无尾盘确认，仅观察。",
+        "MA5": 0,
+        "收盘价": df["最新收盘价"] if "最新收盘价" in df.columns else 0,
+        "最新收盘价": df["收盘价"] if "收盘价" in df.columns else 0,
+        "今日振幅": df["最近5日振幅"] if "最近5日振幅" in df.columns else 0,
+    }
+
+    for col, default_value in default_cols.items():
+        if col not in df.columns:
+            df[col] = default_value
+
+    numeric_cols = [
+        "候选评分",
+        "尾盘评分",
+        "最终评分",
+        "MA5",
+        "收盘价",
+        "最新收盘价",
+        "今日振幅",
+    ]
+
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    return df
+
+
+def get_base_price(row: pd.Series) -> float:
+    """
+    用于生成低吸区间的参考价。
+    优先 MA5，其次收盘价，其次最新收盘价。
+    """
+
     ma5 = safe_float(row.get("MA5", 0))
+    close_price = safe_float(row.get("收盘价", 0))
+    latest_close = safe_float(row.get("最新收盘价", 0))
 
-    if ma5 <= 0:
-        return 999
+    if ma5 > 0:
+        return ma5
 
-    return (close_price - ma5) / ma5 * 100
+    if close_price > 0:
+        return close_price
+
+    return latest_close
 
 
-def get_low_buy_range(ma5: float, amplitude_5d: float) -> str:
+def get_low_buy_range(row: pd.Series) -> str:
     """
-    动态低吸区间：
-    - 普通波动：MA5 ±1%
-    - 中高波动：MA5 -1.5% 到 +1%
-    - 极高波动：MA5 -2% 到 +0.5%
+    低吸区间：
+    - 有 MA5：MA5 附近 -1% 到 +1%
+    - 没 MA5：收盘价下方 1%-2%
     """
 
-    if amplitude_5d >= 30:
-        low = ma5 * 0.98
-        high = ma5 * 1.005
-    elif amplitude_5d >= 20:
-        low = ma5 * 0.985
-        high = ma5 * 1.01
-    else:
+    ma5 = safe_float(row.get("MA5", 0))
+    base_price = get_base_price(row)
+
+    if base_price <= 0:
+        return "-"
+
+    if ma5 > 0:
         low = ma5 * 0.99
         high = ma5 * 1.01
+    else:
+        low = base_price * 0.98
+        high = base_price * 0.99
 
     return f"{low:.2f} - {high:.2f}"
 
 
-def get_stop_loss(ma5: float, amplitude_5d: float) -> str:
+def get_stop_loss(row: pd.Series) -> str:
     """
     动态止损：
-    - 振幅 <15%：MA5下2%
-    - 15%-25%：MA5下3%
-    - >25%：MA5下4%
+    - 振幅小：参考价下2%
+    - 振幅中：参考价下3%
+    - 振幅大：参考价下4%
     """
 
-    if amplitude_5d > 25:
-        stop_loss = ma5 * 0.96
-    elif amplitude_5d >= 15:
-        stop_loss = ma5 * 0.97
+    base_price = get_base_price(row)
+    amplitude = safe_float(row.get("今日振幅", 0))
+
+    if base_price <= 0:
+        return "-"
+
+    if amplitude >= 6:
+        stop_loss = base_price * 0.96
+    elif amplitude >= 4:
+        stop_loss = base_price * 0.97
     else:
-        stop_loss = ma5 * 0.98
+        stop_loss = base_price * 0.98
 
     return f"{stop_loss:.2f}"
 
 
-def get_sell_plan(row: pd.Series) -> str:
-    close_price = safe_float(row.get("最新收盘价", 0))
-    ma5 = safe_float(row.get("MA5", 0))
-    rise_5d = safe_float(row.get("最近5日涨幅", 0))
-    amplitude_5d = safe_float(row.get("最近5日振幅", 0))
-    priority = str(row.get("买入优先级", "C"))
-    strategy_type = str(row.get("策略类型", "隔日T"))
-
-    if priority == "A":
-        return "只做计划低吸；若次日冲高2%-3%，优先兑现；若跌破止损，不补仓。"
-
-    if amplitude_5d >= 30:
-        return "高波动票，只做快进快出；高开3%以上不追，盘中冲高优先走。"
-
-    if rise_5d >= 15:
-        return "5日涨幅偏高，次日只看回落承接；冲高先减，不做恋战。"
-
-    if strategy_type == "趋势低吸":
-        return "低吸后看分时承接；若站上前高可持有到午后，否则冲高兑现。"
-
-    if close_price > ma5:
-        return "围绕MA5做隔日T；高开不追，低开接近MA5再观察。"
-
-    return "只观察，不主动开仓。"
-
-
-def get_position_advice(close_price: float, priority: str) -> str:
+def get_position_advice(row: pd.Series) -> str:
     """
-    仓位建议：
-    - A：3000-5000
-    - B：3000附近
-    - C：观察仓
-    - D：不做
+    仓位建议。
     """
 
-    if close_price <= 0:
+    close_price = safe_float(row.get("收盘价", 0))
+    latest_close = safe_float(row.get("最新收盘价", 0))
+
+    price = close_price if close_price > 0 else latest_close
+
+    if price <= 0:
         return "价格异常，不操作。"
 
-    shares_3000 = int(3000 // close_price // 100 * 100)
-    shares_5000 = int(5000 // close_price // 100 * 100)
+    min_shares = int(SINGLE_STOCK_MIN // price // 100 * 100)
+    max_shares = int(SINGLE_STOCK_MAX // price // 100 * 100)
 
-    if shares_3000 <= 0:
-        return "价格偏高，不适合3W小资金试盘。"
+    if min_shares <= 0:
+        return "价格偏高，不适合当前小资金试盘。"
 
-    if priority == "A":
-        if shares_5000 > shares_3000:
-            return f"建议 {shares_3000}-{shares_5000} 股，单票3000-5000元。"
-        return f"建议 {shares_3000} 股，控制在3000元附近。"
+    if max_shares <= min_shares:
+        return f"建议 {min_shares} 股，控制在约 {SINGLE_STOCK_MIN:.0f} 元附近。"
 
-    if priority == "B":
-        return f"建议 {shares_3000} 股，观察仓。"
-
-    if priority == "C":
-        return "仅观察，暂不开仓。"
-
-    return "放弃。"
+    return f"建议 {min_shares}-{max_shares} 股，单票控制在 {SINGLE_STOCK_MIN:.0f}-{SINGLE_STOCK_MAX:.0f} 元。"
 
 
-def get_abandon_reason(row: pd.Series) -> str:
-    """
-    判断放弃原因。
-    """
-
-    reasons = []
-
-    tag = str(row.get("热点标签", ""))
-    rise_5d = safe_float(row.get("最近5日涨幅", 0))
-    amplitude_5d = safe_float(row.get("最近5日振幅", 0))
-    score = safe_float(row.get("综合评分", 0))
-    ma5_deviation = get_ma5_deviation(row)
-    risk_level = str(row.get("风险等级", ""))
-
-    if rise_5d > 18:
-        reasons.append("5日涨幅过热")
-    if amplitude_5d > 35:
-        reasons.append("5日振幅极端")
-    if ma5_deviation > 8:
-        reasons.append("距离MA5过远")
-    if is_unknown_tag(tag):
-        reasons.append("热点标签未识别")
-    if risk_level == "高":
-        reasons.append("风险等级高")
-    if score < 60:
-        reasons.append("综合评分低")
-
-    return "；".join(reasons)
-
-
-def should_abandon(row: pd.Series) -> bool:
-    """
-    放弃条件，优先级最高。
-    """
-
-    reason = get_abandon_reason(row)
-    return bool(reason)
-
-
-def build_stock_plan(row: pd.Series, include_reason: bool = False) -> dict:
-    code = normalize_code(row.get("股票代码", ""))
-    name = str(row.get("股票名称", ""))
-    tag = str(row.get("热点标签", "未归类"))
-
-    close_price = safe_float(row.get("最新收盘价", 0))
-    ma5 = safe_float(row.get("MA5", 0))
-    amplitude_5d = safe_float(row.get("最近5日振幅", 0))
-
-    priority = str(row.get("买入优先级", "C"))
-    risk_level = str(row.get("风险等级", "中"))
-    strategy_type = str(row.get("策略类型", "隔日T"))
-    score = safe_float(row.get("综合评分", 0))
-
-    result = {
-        "股票代码": code,
-        "股票名称": name,
-        "热点标签": tag,
-        "综合评分": f"{score:.2f}",
-        "风险等级": risk_level,
-        "策略类型": strategy_type,
-        "买入优先级": priority,
-        "最新收盘价": format_price(close_price),
-        "MA5": format_price(ma5),
-        "参考低吸区间": get_low_buy_range(ma5, amplitude_5d),
-        "止损价": get_stop_loss(ma5, amplitude_5d),
-        "次日卖出计划": get_sell_plan(row),
-        "仓位建议": get_position_advice(close_price, priority),
+def build_plan_row(row: pd.Series) -> dict:
+    return {
+        "股票代码": normalize_code(row.get("股票代码", "")),
+        "股票名称": str(row.get("股票名称", "")),
+        "热点标签": str(row.get("热点标签", "")),
+        "候选评分": f"{safe_float(row.get('候选评分', 0)):.2f}",
+        "尾盘评分": f"{safe_float(row.get('尾盘评分', 0)):.2f}",
+        "最终评分": f"{safe_float(row.get('最终评分', 0)):.2f}",
+        "隔夜等级": str(row.get("隔夜建议等级", "")),
+        "参考低吸区间": get_low_buy_range(row),
+        "止损价": get_stop_loss(row),
+        "仓位建议": get_position_advice(row),
+        "隔夜建议说明": str(row.get("隔夜建议说明", "")),
     }
 
-    if include_reason:
-        result["放弃原因"] = get_abandon_reason(row)
 
-    return result
-
-
-def make_markdown_table(rows: list[dict], include_reason: bool = False) -> str:
+def make_markdown_table(rows: list[dict]) -> str:
     if not rows:
         return "无。\n"
 
@@ -241,20 +251,15 @@ def make_markdown_table(rows: list[dict], include_reason: bool = False) -> str:
         "股票代码",
         "股票名称",
         "热点标签",
-        "综合评分",
-        "风险等级",
-        "策略类型",
-        "买入优先级",
-        "最新收盘价",
-        "MA5",
+        "候选评分",
+        "尾盘评分",
+        "最终评分",
+        "隔夜等级",
         "参考低吸区间",
         "止损价",
-        "次日卖出计划",
         "仓位建议",
+        "隔夜建议说明",
     ]
-
-    if include_reason:
-        headers.append("放弃原因")
 
     lines = []
     lines.append("| " + " | ".join(headers) + " |")
@@ -266,165 +271,78 @@ def make_markdown_table(rows: list[dict], include_reason: bool = False) -> str:
     return "\n".join(lines) + "\n"
 
 
-def generate_daily_plan():
-    if not INPUT_FILE.exists():
-        raise FileNotFoundError(f"找不到候选池文件：{INPUT_FILE}")
-
-    df = pd.read_csv(INPUT_FILE, dtype={"股票代码": str})
+def generate_daily_plan() -> None:
+    df, source_name = read_source_data()
 
     if df.empty:
-        raise ValueError("候选池为空，无法生成交易计划")
+        raise ValueError("输入数据为空，无法生成交易计划")
 
-    required_cols = [
-        "股票代码",
-        "股票名称",
-        "热点标签",
-        "最新收盘价",
-        "MA5",
-        "最近5日振幅",
-        "最近5日涨幅",
-        "综合评分",
-    ]
+    df = ensure_columns(df)
 
-    missing_cols = [col for col in required_cols if col not in df.columns]
-
-    if missing_cols:
-        raise ValueError(f"候选池缺少字段：{missing_cols}")
-
-    df["股票代码"] = df["股票代码"].astype(str).str.zfill(6)
-
-    numeric_cols = [
-        "最新收盘价",
-        "MA5",
-        "最近5日振幅",
-        "最近5日涨幅",
-        "综合评分",
-    ]
-
-    if "距MA5偏离率" in df.columns:
-        numeric_cols.append("距MA5偏离率")
-
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df = df.dropna(subset=["最新收盘价", "MA5", "最近5日振幅", "最近5日涨幅", "综合评分"])
-
-    if "买入优先级" not in df.columns:
-        df["买入优先级"] = "C"
-
-    if "风险等级" not in df.columns:
-        df["风险等级"] = "中"
-
-    if "策略类型" not in df.columns:
-        df["策略类型"] = "隔日T"
-
-    if "距MA5偏离率" not in df.columns:
-        df["距MA5偏离率"] = (df["最新收盘价"] - df["MA5"]) / df["MA5"] * 100
-
-    priority_order = {"A": 1, "B": 2, "C": 3, "D": 4}
-    df["priority_rank"] = df["买入优先级"].map(priority_order).fillna(9)
-
-    top20 = df.sort_values(
-        by=["priority_rank", "综合评分"],
+    df = df.sort_values(
+        by=["隔夜建议等级", "最终评分"],
         ascending=[True, False]
-    ).head(20).copy()
+    ).reset_index(drop=True)
 
-    # 排他逻辑：先识别放弃
-    top20["是否放弃"] = top20.apply(should_abandon, axis=1)
+    trade_df = df[df["隔夜建议等级"].isin(["A", "B"])].copy()
+    watch_df = df[df["隔夜建议等级"] == "C"].copy()
+    abandon_df = df[df["隔夜建议等级"] == "D"].copy()
 
-    tradable_df = top20[~top20["是否放弃"]].copy()
-    abandon_df = top20[top20["是否放弃"]].copy()
+    trade_df = trade_df.sort_values("最终评分", ascending=False).head(MAX_TRADE_COUNT)
 
-    # 主观察池：真正可看的2只
-    main_watch_df = tradable_df[
-        (tradable_df["距MA5偏离率"] <= 5)
-        & (tradable_df["最近5日涨幅"] <= 18)
-        & (tradable_df["风险等级"] != "高")
-    ].head(2)
-
-    main_codes = set(main_watch_df["股票代码"].tolist())
-
-    # 重点观察：排除主观察池后的前5
-    focus_df = tradable_df[
-        ~tradable_df["股票代码"].isin(main_codes)
-    ].head(5)
-
-    focus_codes = set(focus_df["股票代码"].tolist())
-
-    # 低吸候选：排除主观察和重点观察
-    low_buy_df = tradable_df[
-        (~tradable_df["股票代码"].isin(main_codes))
-        & (~tradable_df["股票代码"].isin(focus_codes))
-        & (tradable_df["距MA5偏离率"].between(-1, 3))
-        & (tradable_df["最近5日涨幅"] <= 15)
-    ].head(3)
-
-    main_watch_rows = [build_stock_plan(row) for _, row in main_watch_df.iterrows()]
-    focus_rows = [build_stock_plan(row) for _, row in focus_df.iterrows()]
-    low_buy_rows = [build_stock_plan(row) for _, row in low_buy_df.iterrows()]
-    abandon_rows = [build_stock_plan(row, include_reason=True) for _, row in abandon_df.iterrows()]
+    trade_rows = [build_plan_row(row) for _, row in trade_df.iterrows()]
+    watch_rows = [build_plan_row(row) for _, row in watch_df.iterrows()]
+    abandon_rows = [build_plan_row(row) for _, row in abandon_df.iterrows()]
 
     today = datetime.now().strftime("%Y-%m-%d")
 
-    md = f"""# A股隔日T交易计划 v1.3
+    if trade_df.empty:
+        trade_summary = "明日交易池为空：没有 A/B 级标的，原则上空仓，不主动交易。"
+    else:
+        trade_summary = f"明日交易池共 {len(trade_df)} 只，最多只做 {MAX_TRADE_COUNT} 只。"
+
+    md = f"""# A股隔日T交易计划 v1.6.3
 
 生成日期：{today}
 
-数据来源：`output/overnight_t_candidates.csv`
+数据来源：`{source_name}`
 
 ---
 
 ## 一、执行原则
 
-- 单票仓位控制在 `3000-5000 元`
-- 最多实际操作 `2 只`
-- 只做计划内股票，不临盘追陌生票
-- 不追高，只看 MA5 附近低吸机会
+- 只允许 `A/B` 级进入交易池
+- `C` 级只观察，不主动买入
+- `D` 级放弃
+- 单票仓位控制在 `{SINGLE_STOCK_MIN:.0f}-{SINGLE_STOCK_MAX:.0f} 元`
+- 最多实际操作 `{MAX_TRADE_COUNT} 只`
+- 低吸区间不到，不开仓
 - 跌破止损价，不补仓，先退出
 - 高开冲高优先兑现，不恋战
-- 主观察池优先级高于重点观察池
-- 放弃名单不参与交易
 
 ---
 
-## 二、主观察池：明日最多只看2只
+## 二、明日交易池
 
-{make_markdown_table(main_watch_rows)}
+{trade_summary}
 
----
-
-## 三、重点观察：备选跟踪
-
-{make_markdown_table(focus_rows)}
+{make_markdown_table(trade_rows)}
 
 ---
 
-## 四、低吸候选：只等 MA5 附近
+## 三、观察池
 
-{make_markdown_table(low_buy_rows)}
-
----
-
-## 五、放弃名单：不参与交易
-
-{make_markdown_table(abandon_rows, include_reason=True)}
+{make_markdown_table(watch_rows)}
 
 ---
 
-## 六、明日操作限制
+## 四、放弃池
 
-1. 最多只做 `2 只`
-2. 每只只开 `3000-5000 元`
-3. 买点不到，不开仓
-4. 涨幅已经过热的，只观察，不追
-5. 放弃名单不买
-6. 当天亏损达到计划止损，停止交易
+{make_markdown_table(abandon_rows)}
 
 ---
 
-## 七、盘后复盘字段
-
-明日收盘后请记录：
+## 五、盘后复盘字段
 
 | 股票代码 | 是否买入 | 买入价 | 卖出价 | 盈亏 | 是否按计划执行 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -435,10 +353,10 @@ def generate_daily_plan():
     OUTPUT_FILE.write_text(md, encoding="utf-8")
 
     print(f"交易计划已生成：{OUTPUT_FILE}")
-    print(f"主观察池数量：{len(main_watch_rows)}")
-    print(f"重点观察数量：{len(focus_rows)}")
-    print(f"低吸候选数量：{len(low_buy_rows)}")
-    print(f"放弃名单数量：{len(abandon_rows)}")
+    print(f"数据来源：{source_name}")
+    print(f"交易池数量：{len(trade_rows)}")
+    print(f"观察池数量：{len(watch_rows)}")
+    print(f"放弃池数量：{len(abandon_rows)}")
 
 
 if __name__ == "__main__":
