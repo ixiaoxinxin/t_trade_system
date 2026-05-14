@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v1.9.5 Streamlit 精简版
+A股隔日T选股系统 v1.9.6 Streamlit 精简版
 
 升级点：
 1. 一键主流程完整顺序执行
 2. 每个脚本显示执行状态和日志
 3. 执行完成后自动刷新页面
 4. 页面只保留核心信息
+5. 明日交易池中明确展示尾盘确认关键字段
 """
 
 from pathlib import Path
@@ -40,7 +41,7 @@ FACTOR_PERFORMANCE_FILE = Path("output/factor_performance.csv")
 
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v1.9.5",
+    page_title="A股隔日T选股系统 v1.9.6",
     layout="wide"
 )
 
@@ -225,15 +226,25 @@ def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     if "最终评分" in df.columns:
         df["最终评分"] = pd.to_numeric(df["最终评分"], errors="coerce")
 
+    if "尾盘评分" in df.columns:
+        df["尾盘评分"] = pd.to_numeric(df["尾盘评分"], errors="coerce")
+
     if "隔夜建议等级" in df.columns:
         grade_order = {"A": 1, "B": 2, "C": 3, "D": 4}
         df["_rank"] = df["隔夜建议等级"].map(grade_order).fillna(9)
 
-        if "最终评分" in df.columns:
-            df = df.sort_values(["_rank", "最终评分"], ascending=[True, False])
-        else:
-            df = df.sort_values("_rank")
+        sort_cols = ["_rank"]
+        ascending = [True]
 
+        if "最终评分" in df.columns:
+            sort_cols.append("最终评分")
+            ascending.append(False)
+
+        if "尾盘评分" in df.columns:
+            sort_cols.append("尾盘评分")
+            ascending.append(False)
+
+        df = df.sort_values(sort_cols, ascending=ascending)
         df = df.drop(columns=["_rank"])
 
     return df.reset_index(drop=True)
@@ -322,7 +333,7 @@ def show_top_metrics(
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v1.9.5")
+st.title("A股隔日T选股系统 v1.9.6")
 
 st.caption("精简版：市场环境 → 明日交易池 → 午盘验证 → 次日验证 → 因子表现")
 
@@ -411,6 +422,22 @@ with tab1:
 with tab2:
     st.subheader("明日交易池")
 
+    st.markdown("""
+### 尾盘确认关键字段
+
+| 字段 | 含义 | 怎么看 |
+|---|---|---|
+| 隔夜建议等级 | 最终是否适合隔夜 | 只优先看 A/B |
+| 风险等级 | 当前个股风险 | 优先低风险 |
+| 尾盘评分 | 只看尾盘资金和分时强度 | 越高越好 |
+| 最终评分 | 日线评分 + 尾盘评分 + 风控结果 | 越高越好 |
+| 分时结构标签 | 全天/尾盘分时形态 | 优先强势横盘、尾盘资金回流 |
+| 尾盘抢筹标签 | 14:30 后资金态度 | 优先尾盘抢筹、尾盘资金回流 |
+| 隔夜建议说明 | 系统给出的操作解释 | 用于人工复核 |
+""")
+
+    st.divider()
+
     if daily_plan_md:
         st.markdown(daily_plan_md)
     else:
@@ -433,6 +460,7 @@ with tab2:
             "股票代码",
             "股票名称",
             "热点标签",
+            "所属板块",
             "风险等级",
             "隔夜建议等级",
             "候选评分",
@@ -440,11 +468,20 @@ with tab2:
             "最终评分",
             "分时结构标签",
             "尾盘抢筹标签",
+            "今日涨跌幅",
+            "收盘位置",
+            "从低点修复幅度",
+            "尾盘放量倍数",
             "隔夜建议说明",
         ],
     )
 
-    show_table("A/B 核心候选", trade_df)
+    show_table("尾盘确认后的 A/B 核心候选", trade_df)
+
+    st.info(
+        "实盘优先级：A/B + 低风险 + 尾盘评分高 + 分时结构强 + 尾盘资金回流。"
+        " 如果市场环境为系统风险，只看 A 级低风险，且小仓位。"
+    )
 
 
 # =========================
