@@ -1,14 +1,4 @@
-# Python
 __pycache__/
 *.pyc
-
-# Virtual env
 .venv/
-
-# macOS
 .DS_Store
-
-# Output
-output/*.csv
-sector_cache.csv
-overnight_t_candidates.csv
