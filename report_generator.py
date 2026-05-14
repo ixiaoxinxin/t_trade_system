@@ -2,18 +2,19 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T交易计划生成器 v1.6.3
+A股隔日T交易计划生成器 v1.9.2
 
-目标：
-1. 优先读取尾盘确认结果 final_watchlist.csv
-2. 只允许 A/B 进入交易池
-3. C 进入观察池
-4. D 进入放弃池
-5. 如果没有 A/B，明确提示空仓
+升级点：
+1. 优先读取 output/final_watchlist.csv
+2. 接入 output/market_environment.json
+3. 根据市场环境调整交易池和仓位
+4. 系统风险日自动降仓
+5. 情绪冰点日自动空仓
 """
 
 from pathlib import Path
 from datetime import datetime
+import json
 
 import pandas as pd
 import yaml
@@ -23,6 +24,7 @@ CONFIG_FILE = Path("config.yaml")
 
 FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
 CANDIDATES_FILE = Path("output/overnight_t_candidates.csv")
+MARKET_ENV_FILE = Path("output/market_environment.json")
 OUTPUT_FILE = Path("output/daily_plan.md")
 
 
@@ -62,6 +64,32 @@ SINGLE_STOCK_MAX = float(CONFIG["capital"]["single_stock_max"])
 MAX_TRADE_COUNT = int(CONFIG["capital"]["max_trade_count"])
 
 
+def load_market_environment() -> dict:
+    """
+    读取市场环境判断。
+    如果文件不存在，则默认市场环境正常。
+    """
+
+    default_env = {
+        "市场环境": "未知",
+        "风险等级": "未知",
+        "是否允许隔夜": "是",
+        "建议仓位": "按原计划",
+        "交易建议": "未读取到市场环境文件，按原计划执行，但需人工确认。",
+    }
+
+    if not MARKET_ENV_FILE.exists():
+        return default_env
+
+    try:
+        return json.loads(MARKET_ENV_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return default_env
+
+
+MARKET_ENV = load_market_environment()
+
+
 def safe_float(value, default=0.0) -> float:
     try:
         return float(value)
@@ -73,16 +101,7 @@ def normalize_code(code) -> str:
     return str(code).zfill(6)
 
 
-def format_price(value) -> str:
-    return f"{safe_float(value):.2f}"
-
-
 def read_source_data() -> tuple[pd.DataFrame, str]:
-    """
-    优先读取 final_watchlist.csv。
-    如果不存在，则回退 overnight_t_candidates.csv。
-    """
-
     if FINAL_WATCHLIST_FILE.exists():
         df = pd.read_csv(FINAL_WATCHLIST_FILE, dtype={"股票代码": str})
         return df, str(FINAL_WATCHLIST_FILE)
@@ -95,10 +114,6 @@ def read_source_data() -> tuple[pd.DataFrame, str]:
 
 
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    兼容不同版本字段。
-    """
-
     df = df.copy()
 
     df["股票代码"] = df["股票代码"].astype(str).str.zfill(6)
@@ -114,6 +129,7 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "收盘价": df["最新收盘价"] if "最新收盘价" in df.columns else 0,
         "最新收盘价": df["收盘价"] if "收盘价" in df.columns else 0,
         "今日振幅": df["最近5日振幅"] if "最近5日振幅" in df.columns else 0,
+        "风险等级": "中",
     }
 
     for col, default_value in default_cols.items():
@@ -137,11 +153,6 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_base_price(row: pd.Series) -> float:
-    """
-    用于生成低吸区间的参考价。
-    优先 MA5，其次收盘价，其次最新收盘价。
-    """
-
     ma5 = safe_float(row.get("MA5", 0))
     close_price = safe_float(row.get("收盘价", 0))
     latest_close = safe_float(row.get("最新收盘价", 0))
@@ -156,12 +167,6 @@ def get_base_price(row: pd.Series) -> float:
 
 
 def get_low_buy_range(row: pd.Series) -> str:
-    """
-    低吸区间：
-    - 有 MA5：MA5 附近 -1% 到 +1%
-    - 没 MA5：收盘价下方 1%-2%
-    """
-
     ma5 = safe_float(row.get("MA5", 0))
     base_price = get_base_price(row)
 
@@ -179,13 +184,6 @@ def get_low_buy_range(row: pd.Series) -> str:
 
 
 def get_stop_loss(row: pd.Series) -> str:
-    """
-    动态止损：
-    - 振幅小：参考价下2%
-    - 振幅中：参考价下3%
-    - 振幅大：参考价下4%
-    """
-
     base_price = get_base_price(row)
     amplitude = safe_float(row.get("今日振幅", 0))
 
@@ -202,29 +200,68 @@ def get_stop_loss(row: pd.Series) -> str:
     return f"{stop_loss:.2f}"
 
 
-def get_position_advice(row: pd.Series) -> str:
+def get_position_range_by_market(row: pd.Series) -> tuple[float, float, str]:
     """
-    仓位建议。
+    根据市场环境返回仓位区间。
     """
 
+    env = MARKET_ENV.get("市场环境", "未知")
+    grade = str(row.get("隔夜建议等级", "C"))
+    risk_level = str(row.get("风险等级", "中"))
+
+    min_capital = SINGLE_STOCK_MIN
+    max_capital = SINGLE_STOCK_MAX
+    reason = "按原计划。"
+
+    if env == "正常":
+        reason = "市场正常，按原仓位计划。"
+
+    elif env == "偏弱":
+        min_capital = max(1000, SINGLE_STOCK_MIN * 0.5)
+        max_capital = max(1500, SINGLE_STOCK_MAX * 0.5)
+        reason = "市场偏弱，仓位减半。"
+
+    elif env == "系统风险":
+        if grade == "A" and risk_level in ["低", "未知"]:
+            min_capital = 1000
+            max_capital = 2000
+            reason = "系统风险日，只允许A级低风险，小仓位。"
+        else:
+            min_capital = 0
+            max_capital = 0
+            reason = "系统风险日，非A级低风险不交易。"
+
+    elif env == "情绪冰点":
+        min_capital = 0
+        max_capital = 0
+        reason = "情绪冰点，不隔夜。"
+
+    return min_capital, max_capital, reason
+
+
+def get_position_advice(row: pd.Series) -> str:
     close_price = safe_float(row.get("收盘价", 0))
     latest_close = safe_float(row.get("最新收盘价", 0))
-
     price = close_price if close_price > 0 else latest_close
 
     if price <= 0:
         return "价格异常，不操作。"
 
-    min_shares = int(SINGLE_STOCK_MIN // price // 100 * 100)
-    max_shares = int(SINGLE_STOCK_MAX // price // 100 * 100)
+    min_capital, max_capital, reason = get_position_range_by_market(row)
+
+    if max_capital <= 0:
+        return f"不操作。{reason}"
+
+    min_shares = int(min_capital // price // 100 * 100)
+    max_shares = int(max_capital // price // 100 * 100)
 
     if min_shares <= 0:
-        return "价格偏高，不适合当前小资金试盘。"
+        return f"价格偏高，最多100股观察。{reason}"
 
     if max_shares <= min_shares:
-        return f"建议 {min_shares} 股，控制在约 {SINGLE_STOCK_MIN:.0f} 元附近。"
+        return f"建议 {min_shares} 股。{reason}"
 
-    return f"建议 {min_shares}-{max_shares} 股，单票控制在 {SINGLE_STOCK_MIN:.0f}-{SINGLE_STOCK_MAX:.0f} 元。"
+    return f"建议 {min_shares}-{max_shares} 股。{reason}"
 
 
 def build_plan_row(row: pd.Series) -> dict:
@@ -235,6 +272,7 @@ def build_plan_row(row: pd.Series) -> dict:
         "候选评分": f"{safe_float(row.get('候选评分', 0)):.2f}",
         "尾盘评分": f"{safe_float(row.get('尾盘评分', 0)):.2f}",
         "最终评分": f"{safe_float(row.get('最终评分', 0)):.2f}",
+        "风险等级": str(row.get("风险等级", "")),
         "隔夜等级": str(row.get("隔夜建议等级", "")),
         "参考低吸区间": get_low_buy_range(row),
         "止损价": get_stop_loss(row),
@@ -254,6 +292,7 @@ def make_markdown_table(rows: list[dict]) -> str:
         "候选评分",
         "尾盘评分",
         "最终评分",
+        "风险等级",
         "隔夜等级",
         "参考低吸区间",
         "止损价",
@@ -271,6 +310,25 @@ def make_markdown_table(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def filter_trade_pool_by_market(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    根据市场环境过滤交易池。
+    """
+
+    env = MARKET_ENV.get("市场环境", "未知")
+
+    if env == "情绪冰点":
+        return df.iloc[0:0].copy()
+
+    if env == "系统风险":
+        return df[
+            (df["隔夜建议等级"] == "A")
+            & (df["风险等级"].astype(str).isin(["低", "未知"]))
+        ].copy()
+
+    return df[df["隔夜建议等级"].isin(["A", "B"])].copy()
+
+
 def generate_daily_plan() -> None:
     df, source_name = read_source_data()
 
@@ -284,7 +342,7 @@ def generate_daily_plan() -> None:
         ascending=[True, False]
     ).reset_index(drop=True)
 
-    trade_df = df[df["隔夜建议等级"].isin(["A", "B"])].copy()
+    trade_df = filter_trade_pool_by_market(df)
     watch_df = df[df["隔夜建议等级"] == "C"].copy()
     abandon_df = df[df["隔夜建议等级"] == "D"].copy()
 
@@ -296,12 +354,18 @@ def generate_daily_plan() -> None:
 
     today = datetime.now().strftime("%Y-%m-%d")
 
+    env = MARKET_ENV.get("市场环境", "未知")
+    env_risk = MARKET_ENV.get("风险等级", "未知")
+    env_allow = MARKET_ENV.get("是否允许隔夜", "未知")
+    env_position = MARKET_ENV.get("建议仓位", "未知")
+    env_advice = MARKET_ENV.get("交易建议", "未读取到交易建议。")
+
     if trade_df.empty:
-        trade_summary = "明日交易池为空：没有 A/B 级标的，原则上空仓，不主动交易。"
+        trade_summary = "明日交易池为空：当前市场环境或个股等级不满足隔夜条件，原则上空仓。"
     else:
         trade_summary = f"明日交易池共 {len(trade_df)} 只，最多只做 {MAX_TRADE_COUNT} 只。"
 
-    md = f"""# A股隔日T交易计划 v1.6.3
+    md = f"""# A股隔日T交易计划 v1.9.2
 
 生成日期：{today}
 
@@ -309,20 +373,33 @@ def generate_daily_plan() -> None:
 
 ---
 
-## 一、执行原则
+## 一、市场环境判断
 
-- 只允许 `A/B` 级进入交易池
+| 项目 | 结果 |
+|---|---|
+| 市场环境 | {env} |
+| 风险等级 | {env_risk} |
+| 是否允许隔夜 | {env_allow} |
+| 建议仓位 | {env_position} |
+| 交易建议 | {env_advice} |
+
+---
+
+## 二、执行原则
+
+- 正常：允许 `A/B` 低风险票隔夜
+- 偏弱：只做 `A/B` 低风险，仓位减半
+- 系统风险：只允许 `A` 级低风险，单票不超过 `2000 元`
+- 情绪冰点：不隔夜
 - `C` 级只观察，不主动买入
 - `D` 级放弃
-- 单票仓位控制在 `{SINGLE_STOCK_MIN:.0f}-{SINGLE_STOCK_MAX:.0f} 元`
-- 最多实际操作 `{MAX_TRADE_COUNT} 只`
 - 低吸区间不到，不开仓
 - 跌破止损价，不补仓，先退出
 - 高开冲高优先兑现，不恋战
 
 ---
 
-## 二、明日交易池
+## 三、明日交易池
 
 {trade_summary}
 
@@ -330,19 +407,19 @@ def generate_daily_plan() -> None:
 
 ---
 
-## 三、观察池
+## 四、观察池
 
 {make_markdown_table(watch_rows)}
 
 ---
 
-## 四、放弃池
+## 五、放弃池
 
 {make_markdown_table(abandon_rows)}
 
 ---
 
-## 五、盘后复盘字段
+## 六、盘后复盘字段
 
 | 股票代码 | 是否买入 | 买入价 | 卖出价 | 盈亏 | 是否按计划执行 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -354,6 +431,8 @@ def generate_daily_plan() -> None:
 
     print(f"交易计划已生成：{OUTPUT_FILE}")
     print(f"数据来源：{source_name}")
+    print(f"市场环境：{env}")
+    print(f"交易建议：{env_advice}")
     print(f"交易池数量：{len(trade_rows)}")
     print(f"观察池数量：{len(watch_rows)}")
     print(f"放弃池数量：{len(abandon_rows)}")
