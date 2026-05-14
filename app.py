@@ -2,17 +2,19 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v1.9.4 Streamlit 精简版
+A股隔日T选股系统 v1.9.5 Streamlit 精简版
 
-原则：
-1. 只显示最重要信息
-2. 减少冗余表格
-3. 聚焦实盘执行
+升级点：
+1. 一键主流程完整顺序执行
+2. 每个脚本显示执行状态和日志
+3. 执行完成后自动刷新页面
+4. 页面只保留核心信息
 """
 
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pandas as pd
 import streamlit as st
@@ -38,7 +40,7 @@ FACTOR_PERFORMANCE_FILE = Path("output/factor_performance.csv")
 
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v1.9.4",
+    page_title="A股隔日T选股系统 v1.9.5",
     layout="wide"
 )
 
@@ -47,9 +49,14 @@ st.set_page_config(
 # 通用函数
 # =========================
 
-def run_script(script_name: str) -> bool:
+def run_script(script_name: str) -> tuple[bool, str, str]:
     """
     执行指定 Python 脚本。
+
+    返回：
+    - 是否成功
+    - stdout
+    - stderr
     """
 
     try:
@@ -61,31 +68,66 @@ def run_script(script_name: str) -> bool:
             errors="ignore",
         )
 
-        if result.returncode != 0:
-            st.error(f"{script_name} 执行失败")
-            if result.stderr:
-                st.code(result.stderr[-4000:])
-            return False
+        success = result.returncode == 0
 
-        st.success(f"{script_name} 执行完成")
-
-        if result.stdout:
-            st.code(result.stdout[-2000:])
-
-        return True
+        return success, result.stdout or "", result.stderr or ""
 
     except Exception as e:
-        st.error(f"执行 {script_name} 出错：{e}")
-        return False
+        return False, "", str(e)
 
 
-def run_main_pipeline() -> None:
+def show_script_result(script_name: str, success: bool, stdout: str, stderr: str) -> None:
     """
-    主流程：
+    展示单个脚本执行结果。
+    """
+
+    if success:
+        st.success(f"{script_name} 执行完成")
+    else:
+        st.error(f"{script_name} 执行失败")
+
+    if stdout:
+        with st.expander(f"{script_name} 运行日志", expanded=False):
+            st.code(stdout[-4000:])
+
+    if stderr:
+        with st.expander(f"{script_name} 错误日志", expanded=True):
+            st.code(stderr[-4000:])
+
+
+def run_single_script_and_refresh(script_name: str) -> None:
+    """
+    执行单个脚本，完成后自动刷新。
+    """
+
+    with st.status(f"正在执行 {script_name} ...", expanded=True) as status:
+        success, stdout, stderr = run_script(script_name)
+
+        show_script_result(script_name, success, stdout, stderr)
+
+        if success:
+            status.update(
+                label=f"{script_name} 执行完成，正在刷新页面...",
+                state="complete",
+            )
+            time.sleep(1)
+            st.rerun()
+        else:
+            status.update(
+                label=f"{script_name} 执行失败",
+                state="error",
+            )
+
+
+def run_main_pipeline_and_refresh() -> None:
+    """
+    一键主流程：
     1. 市场环境
     2. 候选池
     3. 尾盘确认
     4. 交易计划
+
+    全部执行成功后自动刷新页面。
     """
 
     steps = [
@@ -95,14 +137,31 @@ def run_main_pipeline() -> None:
         "report_generator.py",
     ]
 
-    for script in steps:
-        ok = run_script(script)
+    all_success = True
 
-        if not ok:
-            st.error(f"主流程中断：{script}")
-            return
+    with st.status("正在执行一键主流程...", expanded=True) as status:
+        for index, script in enumerate(steps, start=1):
+            st.write(f"步骤 {index}/{len(steps)}：{script}")
 
-    st.success("主流程完成")
+            success, stdout, stderr = run_script(script)
+
+            show_script_result(script, success, stdout, stderr)
+
+            if not success:
+                all_success = False
+                status.update(
+                    label=f"主流程中断：{script} 执行失败",
+                    state="error",
+                )
+                break
+
+        if all_success:
+            status.update(
+                label="一键主流程全部执行完成，正在刷新页面...",
+                state="complete",
+            )
+            time.sleep(1)
+            st.rerun()
 
 
 def load_csv(file_path: Path) -> pd.DataFrame:
@@ -263,9 +322,9 @@ def show_top_metrics(
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v1.9.4")
+st.title("A股隔日T选股系统 v1.9.5")
 
-st.caption("精简版：只看市场环境、交易池、午盘验证、次日验证、因子表现。")
+st.caption("精简版：市场环境 → 明日交易池 → 午盘验证 → 次日验证 → 因子表现")
 
 st.divider()
 
@@ -279,23 +338,19 @@ col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     if st.button("市场环境", use_container_width=True):
-        run_script("market_environment.py")
-        st.rerun()
+        run_single_script_and_refresh("market_environment.py")
 
 with col2:
     if st.button("一键主流程", use_container_width=True):
-        run_main_pipeline()
-        st.rerun()
+        run_main_pipeline_and_refresh()
 
 with col3:
     if st.button("午盘验证", use_container_width=True):
-        run_script("lunch_validator.py")
-        st.rerun()
+        run_single_script_and_refresh("lunch_validator.py")
 
 with col4:
     if st.button("次日验证", use_container_width=True):
-        run_script("next_day_validator.py")
-        st.rerun()
+        run_single_script_and_refresh("next_day_validator.py")
 
 st.divider()
 
@@ -365,31 +420,31 @@ with tab2:
 
     final_df = sort_final_watchlist(final_df)
 
-    if not final_df.empty:
+    if not final_df.empty and "隔夜建议等级" in final_df.columns:
         trade_df = final_df[
             final_df["隔夜建议等级"].isin(["A", "B"])
-        ].copy() if "隔夜建议等级" in final_df.columns else final_df.copy()
-
-        trade_df = keep_columns(
-            trade_df,
-            [
-                "股票代码",
-                "股票名称",
-                "热点标签",
-                "风险等级",
-                "隔夜建议等级",
-                "候选评分",
-                "尾盘评分",
-                "最终评分",
-                "分时结构标签",
-                "尾盘抢筹标签",
-                "隔夜建议说明",
-            ],
-        )
-
-        show_table("A/B 核心候选", trade_df)
+        ].copy()
     else:
-        st.warning("暂无尾盘确认结果。")
+        trade_df = final_df.copy()
+
+    trade_df = keep_columns(
+        trade_df,
+        [
+            "股票代码",
+            "股票名称",
+            "热点标签",
+            "风险等级",
+            "隔夜建议等级",
+            "候选评分",
+            "尾盘评分",
+            "最终评分",
+            "分时结构标签",
+            "尾盘抢筹标签",
+            "隔夜建议说明",
+        ],
+    )
+
+    show_table("A/B 核心候选", trade_df)
 
 
 # =========================
