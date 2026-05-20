@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v2.0.1 Streamlit 精简版
+A股隔日T选股系统 v2.1.1 Streamlit 精简版
 
 升级点：
 1. 一键主流程完整顺序执行
@@ -11,6 +11,7 @@ A股隔日T选股系统 v2.0.1 Streamlit 精简版
 4. 页面只保留核心信息
 5. 明日交易池中明确展示尾盘确认关键字段
 6. 增加人工复盘案例库
+7. 增加卖点信号页面
 """
 
 from pathlib import Path
@@ -32,6 +33,9 @@ MARKET_ENV_MD_FILE = Path("output/market_environment.md")
 FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
 PLAN_FILE = Path("output/daily_plan.md")
 
+SELL_SIGNAL_FILE = Path("output/sell_signal.csv")
+SELL_SIGNAL_MD_FILE = Path("output/sell_signal.md")
+
 LUNCH_REVIEW_FILE = Path("output/lunch_review.csv")
 LUNCH_REVIEW_MD_FILE = Path("output/lunch_review.md")
 
@@ -42,7 +46,7 @@ FACTOR_PERFORMANCE_FILE = Path("output/factor_performance.csv")
 
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v2.0.1",
+    page_title="A股隔日T选股系统 v2.1.1",
     layout="wide"
 )
 
@@ -52,15 +56,6 @@ st.set_page_config(
 # =========================
 
 def run_script(script_name: str) -> tuple[bool, str, str]:
-    """
-    执行指定 Python 脚本。
-
-    返回：
-    - 是否成功
-    - stdout
-    - stderr
-    """
-
     try:
         result = subprocess.run(
             [sys.executable, script_name],
@@ -71,7 +66,6 @@ def run_script(script_name: str) -> tuple[bool, str, str]:
         )
 
         success = result.returncode == 0
-
         return success, result.stdout or "", result.stderr or ""
 
     except Exception as e:
@@ -79,10 +73,6 @@ def run_script(script_name: str) -> tuple[bool, str, str]:
 
 
 def show_script_result(script_name: str, success: bool, stdout: str, stderr: str) -> None:
-    """
-    展示单个脚本执行结果。
-    """
-
     if success:
         st.success(f"{script_name} 执行完成")
     else:
@@ -98,10 +88,6 @@ def show_script_result(script_name: str, success: bool, stdout: str, stderr: str
 
 
 def run_single_script_and_refresh(script_name: str) -> None:
-    """
-    执行单个脚本，完成后自动刷新。
-    """
-
     with st.status(f"正在执行 {script_name} ...", expanded=True) as status:
         success, stdout, stderr = run_script(script_name)
 
@@ -122,16 +108,6 @@ def run_single_script_and_refresh(script_name: str) -> None:
 
 
 def run_main_pipeline_and_refresh() -> None:
-    """
-    一键主流程：
-    1. 市场环境
-    2. 候选池
-    3. 尾盘确认
-    4. 交易计划
-
-    全部执行成功后自动刷新页面。
-    """
-
     steps = [
         "market_environment.py",
         "strategy_overnight_t.py",
@@ -146,7 +122,6 @@ def run_main_pipeline_and_refresh() -> None:
             st.write(f"步骤 {index}/{len(steps)}：{script}")
 
             success, stdout, stderr = run_script(script)
-
             show_script_result(script, success, stdout, stderr)
 
             if not success:
@@ -167,10 +142,6 @@ def run_main_pipeline_and_refresh() -> None:
 
 
 def load_csv(file_path: Path) -> pd.DataFrame:
-    """
-    读取 CSV。
-    """
-
     if not file_path.exists():
         return pd.DataFrame()
 
@@ -188,10 +159,6 @@ def load_csv(file_path: Path) -> pd.DataFrame:
 
 
 def load_markdown(file_path: Path) -> str:
-    """
-    读取 Markdown。
-    """
-
     if not file_path.exists():
         return ""
 
@@ -202,23 +169,14 @@ def load_markdown(file_path: Path) -> str:
 
 
 def keep_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """
-    只保留核心字段。
-    """
-
     if df.empty:
         return df
 
     existing = [col for col in columns if col in df.columns]
-
     return df[existing].copy()
 
 
 def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    尾盘确认排序。
-    """
-
     if df.empty:
         return df
 
@@ -252,10 +210,6 @@ def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def show_table(title: str, df: pd.DataFrame) -> None:
-    """
-    展示表格。
-    """
-
     st.subheader(title)
 
     if df.empty:
@@ -270,10 +224,6 @@ def show_table(title: str, df: pd.DataFrame) -> None:
 
 
 def get_market_summary(market_df: pd.DataFrame) -> dict:
-    """
-    提取市场环境摘要。
-    """
-
     if market_df.empty:
         return {
             "市场环境": "-",
@@ -295,16 +245,13 @@ def get_market_summary(market_df: pd.DataFrame) -> dict:
 def show_top_metrics(
     market_df: pd.DataFrame,
     final_df: pd.DataFrame,
+    sell_df: pd.DataFrame,
     lunch_df: pd.DataFrame,
     next_df: pd.DataFrame,
 ) -> None:
-    """
-    顶部核心指标。
-    """
-
     market = get_market_summary(market_df)
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     with col1:
         st.metric("市场环境", market["市场环境"])
@@ -320,9 +267,12 @@ def show_top_metrics(
         st.metric("A/B 候选", count)
 
     with col4:
-        st.metric("午盘验证", len(lunch_df) if not lunch_df.empty else 0)
+        st.metric("卖点信号", len(sell_df) if not sell_df.empty else 0)
 
     with col5:
+        st.metric("午盘验证", len(lunch_df) if not lunch_df.empty else 0)
+
+    with col6:
         if not next_df.empty and "是否验证成功" in next_df.columns:
             success_rate = next_df["是否验证成功"].astype(str).eq("是").mean() * 100
             st.metric("验证成功率", f"{success_rate:.1f}%")
@@ -331,10 +281,6 @@ def show_top_metrics(
 
 
 def show_manual_review_cases() -> None:
-    """
-    人工复盘案例库。
-    """
-
     st.subheader("人工复盘案例库")
 
     st.markdown("""
@@ -366,22 +312,11 @@ def show_manual_review_cases() -> None:
 
 **弱市环境下的 B 级强势横盘验证单。**
 
-系统选股有效，次日给出 +2% 以上冲高空间，说明：
-
-| 因子 | 结论 |
-|---|---|
-| 强势横盘型 | 有效 |
-| 弱市强势股 | 有效 |
-| B级低仓验证 | 合理 |
-| 尾盘普通 | 确定性不如尾盘资金回流 |
+系统选股有效，次日给出 +2% 以上冲高空间。
 
 ---
 
 ### 实际问题
-
-这笔交易最大问题不是买点，而是卖点。
-
-具体表现：
 
 | 问题 | 说明 |
 |---|---|
@@ -416,23 +351,6 @@ def show_manual_review_cases() -> None:
 
 ---
 
-### 对系统的升级要求
-
-下一版本应新增：
-
-**sell_signal_engine.py**
-
-核心目标：
-
-- 对 A/B 核心候选生成次日止盈计划
-- 计算 1%、2%、3% 止盈价
-- 根据市场环境调整止盈速度
-- 根据分时结构决定持有/兑现
-- 用 PushPlus 推送微信提醒
-- 后续记录卖出结果，验证卖点系统盈利能力
-
----
-
 ## 案例二：环旭电子
 
 | 项目 | 结论 |
@@ -453,36 +371,10 @@ def show_manual_review_cases() -> None:
 
 ---
 
-## 当前有效性排序
-
-| 结构 | 当前有效性 |
-|---|---|
-| 尾盘资金回流 | 高 |
-| 强势横盘 | 高 |
-| 弱市强势横盘 | 高，但必须快进快出 |
-| 急跌修复 | 中低 |
-| 冲高回落 | 低 |
-
----
-
 ## 当前系统阶段结论
 
-v1.x 已初步验证：
-
-**选股系统有效。**
-
-v2.x 重点应转向：
-
-**卖点系统。**
-
-当前最重要目标：
-
-不是继续找更多股票，而是提高：
-
-- 止盈效率
-- 利润保留率
-- 冲高回落处理能力
-- 弱市兑现纪律
+v1.x 已初步验证：**选股系统有效。**  
+v2.x 重点转向：**卖点系统。**
 """)
 
 
@@ -490,9 +382,9 @@ v2.x 重点应转向：
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v2.0.1")
+st.title("A股隔日T选股系统 v2.1.1")
 
-st.caption("精简版：市场环境 → 明日交易池 → 午盘验证 → 次日验证 → 因子表现 → 人工复盘")
+st.caption("精简版：市场环境 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 因子表现 → 人工复盘")
 
 st.divider()
 
@@ -502,7 +394,7 @@ st.divider()
 
 st.subheader("操作区")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     if st.button("市场环境", use_container_width=True):
@@ -513,10 +405,14 @@ with col2:
         run_main_pipeline_and_refresh()
 
 with col3:
+    if st.button("卖点信号", use_container_width=True):
+        run_single_script_and_refresh("sell_signal_engine.py")
+
+with col4:
     if st.button("午盘验证", use_container_width=True):
         run_single_script_and_refresh("lunch_validator.py")
 
-with col4:
+with col5:
     if st.button("次日验证", use_container_width=True):
         run_single_script_and_refresh("next_day_validator.py")
 
@@ -528,18 +424,21 @@ st.divider()
 
 market_df = load_csv(MARKET_ENV_FILE)
 final_df = load_csv(FINAL_WATCHLIST_FILE)
+sell_signal_df = load_csv(SELL_SIGNAL_FILE)
 lunch_df = load_csv(LUNCH_REVIEW_FILE)
 next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
 market_md = load_markdown(MARKET_ENV_MD_FILE)
+sell_signal_md = load_markdown(SELL_SIGNAL_MD_FILE)
 lunch_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
 
 show_top_metrics(
     market_df=market_df,
     final_df=final_df,
+    sell_df=sell_signal_df,
     lunch_df=lunch_df,
     next_df=next_df,
 )
@@ -550,19 +449,16 @@ st.divider()
 # Tab 区
 # =========================
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "市场环境",
     "明日交易池",
+    "卖点信号",
     "午盘验证",
     "次日验证",
     "因子表现",
     "人工复盘",
 ])
 
-
-# =========================
-# 市场环境
-# =========================
 
 with tab1:
     st.subheader("市场环境判断")
@@ -572,10 +468,6 @@ with tab1:
     else:
         st.warning("暂无市场环境报告，请先点击【市场环境】按钮。")
 
-
-# =========================
-# 明日交易池
-# =========================
 
 with tab2:
     st.subheader("明日交易池")
@@ -636,17 +528,41 @@ with tab2:
 
     show_table("尾盘确认后的 A/B 核心候选", trade_df)
 
-    st.info(
-        "实盘优先级：A/B + 低风险 + 尾盘评分高 + 分时结构强 + 尾盘资金回流。"
-        " 如果市场环境为系统风险，只看 A 级低风险，且小仓位。"
-    )
-
-
-# =========================
-# 午盘验证
-# =========================
 
 with tab3:
+    st.subheader("卖点信号")
+
+    if sell_signal_md:
+        st.markdown(sell_signal_md)
+    else:
+        st.warning("暂无卖点信号，请点击【卖点信号】按钮。")
+
+    st.divider()
+
+    sell_core_df = keep_columns(
+        sell_signal_df,
+        [
+            "股票代码",
+            "股票名称",
+            "隔夜等级",
+            "市场环境",
+            "参考价",
+            "当前价",
+            "当前涨幅",
+            "最高涨幅",
+            "高点回撤",
+            "冲高保持率",
+            "保持率标签",
+            "均线状态",
+            "卖出信号",
+            "卖出理由",
+        ],
+    )
+
+    show_table("卖点核心信号", sell_core_df)
+
+
+with tab4:
     st.subheader("午盘验证")
 
     if lunch_md:
@@ -677,11 +593,7 @@ with tab3:
     show_table("午盘核心结果", lunch_core_df)
 
 
-# =========================
-# 次日验证
-# =========================
-
-with tab4:
+with tab5:
     st.subheader("次日验证")
 
     if next_md:
@@ -712,11 +624,7 @@ with tab4:
     show_table("次日验证明细", next_core_df)
 
 
-# =========================
-# 因子表现
-# =========================
-
-with tab5:
+with tab6:
     st.subheader("因子表现")
 
     factor_core_df = keep_columns(
@@ -738,9 +646,5 @@ with tab5:
     show_table("因子表现统计", factor_core_df)
 
 
-# =========================
-# 人工复盘
-# =========================
-
-with tab6:
+with tab7:
     show_manual_review_cases()
