@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v2.1.1 Streamlit 精简版
+A股隔日T选股系统 v2.2.0 Streamlit 精简版
 
 升级点：
 1. 一键主流程完整顺序执行
@@ -10,14 +10,15 @@ A股隔日T选股系统 v2.1.1 Streamlit 精简版
 3. 执行完成后自动刷新页面
 4. 页面只保留核心信息
 5. 明日交易池中明确展示尾盘确认关键字段
-6. 增加人工复盘案例库
-7. 增加卖点信号页面
+6. 增加卖点信号页面
+7. 人工复盘案例库改为动态读取文件
 """
 
 from pathlib import Path
 import subprocess
 import sys
 import time
+import json
 
 import pandas as pd
 import streamlit as st
@@ -44,9 +45,12 @@ NEXT_DAY_REVIEW_MD_FILE = Path("output/next_day_review.md")
 
 FACTOR_PERFORMANCE_FILE = Path("output/factor_performance.csv")
 
+REVIEW_CASES_FILE = Path("output/review_cases.jsonl")
+REVIEW_CASES_MD_FILE = Path("output/review_cases.md")
+
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v2.1.1",
+    page_title="A股隔日T选股系统 v2.2.0",
     layout="wide"
 )
 
@@ -158,6 +162,29 @@ def load_csv(file_path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def load_jsonl(file_path: Path) -> pd.DataFrame:
+    if not file_path.exists():
+        return pd.DataFrame()
+
+    rows = []
+
+    try:
+        with file_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                rows.append(json.loads(line))
+
+        return pd.DataFrame(rows)
+
+    except Exception as e:
+        st.error(f"读取 {file_path} 失败：{e}")
+        return pd.DataFrame()
+
+
 def load_markdown(file_path: Path) -> str:
     if not file_path.exists():
         return ""
@@ -248,10 +275,11 @@ def show_top_metrics(
     sell_df: pd.DataFrame,
     lunch_df: pd.DataFrame,
     next_df: pd.DataFrame,
+    review_df: pd.DataFrame,
 ) -> None:
     market = get_market_summary(market_df)
 
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
     with col1:
         st.metric("市场环境", market["市场环境"])
@@ -279,110 +307,15 @@ def show_top_metrics(
         else:
             st.metric("验证成功率", "-")
 
-
-def show_manual_review_cases() -> None:
-    st.subheader("人工复盘案例库")
-
-    st.markdown("""
-# 人工复盘案例库 v2.0.1
-
----
-
-## 案例一：共达电声（002655）
-
-### 交易结果
-
-| 项目 | 内容 |
-|---|---|
-| 买入时间 | 尾盘 |
-| 买入价 | 37.50 |
-| 买入数量 | 200股 |
-| 卖出价 | 38.10 / 37.70 |
-| 平均卖出价 | 37.90 |
-| 实际盈利 | 约 68.2 元 |
-| 市场环境 | 偏弱，大盘约 -0.88% |
-| 系统结构 | B级 + 强势横盘型 |
-| 尾盘抢筹 | 尾盘普通 |
-
----
-
-### 系统判断
-
-这笔交易属于：
-
-**弱市环境下的 B 级强势横盘验证单。**
-
-系统选股有效，次日给出 +2% 以上冲高空间。
-
----
-
-### 实际问题
-
-| 问题 | 说明 |
-|---|---|
-| 达到 +2% 后未完全兑现 | 弱市中应优先止盈 |
-| 冲高后回落未及时处理 | 利润回吐 |
-| 37.70 卖出偏慢 | 第二笔卖点效率较低 |
-| 缺少规则化止盈 | 卖出仍带主观情绪 |
-
----
-
-### 优化后的标准卖法
-
-| 卖点 | 条件 | 动作 |
-|---|---|---|
-| 第一卖点 | 价格冲到 38.00~38.20，达到约 +2% | 先卖出至少一半 |
-| 第二卖点 | 高点回撤超过 1.5% | 清仓或继续减仓 |
-| 防守卖点 | 跌破分时均线 | 清仓 |
-| 弱市规则 | 大盘弱于 -0.5%，个股达到 2% | 不恋战，优先兑现 |
-
----
-
-### 本案例沉淀出的卖点因子
-
-| 因子 | 规则 |
-|---|---|
-| 市场环境 | 偏弱/系统风险时，盈利阈值降低 |
-| 达到2% | 弱市中触发主动止盈 |
-| 高点回撤 | 回撤超过 1.5% 触发卖出 |
-| 分时均线 | 跌破均线视为承接减弱 |
-| 冲高保持率 | 低于 40% 视为假强 |
-| 尾盘抢筹强度 | 尾盘普通的票，次日更应快进快出 |
-
----
-
-## 案例二：环旭电子
-
-| 项目 | 结论 |
-|---|---|
-| 结构 | 尾盘资金回流 |
-| 次日表现 | 成功 |
-| 系统结论 | 尾盘资金回流是高有效性结构 |
-
----
-
-## 案例三：潍柴动力
-
-| 项目 | 结论 |
-|---|---|
-| 结构 | 急跌修复 |
-| 次日表现 | 失败 |
-| 系统结论 | 急跌修复持续性较差，隔夜应降权 |
-
----
-
-## 当前系统阶段结论
-
-v1.x 已初步验证：**选股系统有效。**  
-v2.x 重点转向：**卖点系统。**
-""")
+    with col7:
+        st.metric("复盘案例", len(review_df) if not review_df.empty else 0)
 
 
 # =========================
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v2.1.1")
+st.title("A股隔日T选股系统 v2.2.0")
 
 st.caption("精简版：市场环境 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 因子表现 → 人工复盘")
 
@@ -394,7 +327,7 @@ st.divider()
 
 st.subheader("操作区")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 with col1:
     if st.button("市场环境", use_container_width=True):
@@ -416,6 +349,10 @@ with col5:
     if st.button("次日验证", use_container_width=True):
         run_single_script_and_refresh("next_day_validator.py")
 
+with col6:
+    if st.button("生成复盘库", use_container_width=True):
+        run_single_script_and_refresh("review_manager.py")
+
 st.divider()
 
 # =========================
@@ -428,12 +365,14 @@ sell_signal_df = load_csv(SELL_SIGNAL_FILE)
 lunch_df = load_csv(LUNCH_REVIEW_FILE)
 next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
+review_cases_df = load_jsonl(REVIEW_CASES_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
 market_md = load_markdown(MARKET_ENV_MD_FILE)
 sell_signal_md = load_markdown(SELL_SIGNAL_MD_FILE)
 lunch_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
+review_cases_md = load_markdown(REVIEW_CASES_MD_FILE)
 
 show_top_metrics(
     market_df=market_df,
@@ -441,6 +380,7 @@ show_top_metrics(
     sell_df=sell_signal_df,
     lunch_df=lunch_df,
     next_df=next_df,
+    review_df=review_cases_df,
 )
 
 st.divider()
@@ -647,4 +587,28 @@ with tab6:
 
 
 with tab7:
-    show_manual_review_cases()
+    st.subheader("人工复盘案例库")
+
+    if review_cases_md:
+        st.markdown(review_cases_md)
+    else:
+        st.warning("暂无复盘案例库，请点击【生成复盘库】按钮。")
+
+    st.divider()
+
+    review_core_df = keep_columns(
+        review_cases_df,
+        [
+            "日期",
+            "股票代码",
+            "股票名称",
+            "交易类型",
+            "实际盈亏",
+            "市场环境",
+            "所属板块",
+            "系统结构",
+            "系统结论",
+        ],
+    )
+
+    show_table("复盘案例明细", review_core_df)
