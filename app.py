@@ -2,16 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v2.2.0 Streamlit 精简版
+A股隔日T选股系统 v2.3.0 Streamlit 精简版
 
 升级点：
-1. 一键主流程完整顺序执行
-2. 每个脚本显示执行状态和日志
-3. 执行完成后自动刷新页面
-4. 页面只保留核心信息
-5. 明日交易池中明确展示尾盘确认关键字段
-6. 增加卖点信号页面
-7. 人工复盘案例库改为动态读取文件
+1. 页面降噪，删除高低点/最高涨幅/最低涨幅等冗余展示
+2. 次日验证拆分为：验证成功 / 验证失败或待优化
+3. 已购买股票优先展示
+4. 市场环境增加板块资金方向展示
+5. 原始 Markdown 报告默认折叠
+6. 人工复盘案例库动态读取
 """
 
 from pathlib import Path
@@ -31,6 +30,9 @@ import streamlit as st
 MARKET_ENV_FILE = Path("output/market_environment.csv")
 MARKET_ENV_MD_FILE = Path("output/market_environment.md")
 
+SECTOR_FLOW_FILE = Path("output/sector_fund_flow.csv")
+SECTOR_FLOW_MD_FILE = Path("output/sector_fund_flow.md")
+
 FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
 PLAN_FILE = Path("output/daily_plan.md")
 
@@ -48,9 +50,11 @@ FACTOR_PERFORMANCE_FILE = Path("output/factor_performance.csv")
 REVIEW_CASES_FILE = Path("output/review_cases.jsonl")
 REVIEW_CASES_MD_FILE = Path("output/review_cases.md")
 
+TRADE_RECORD_FILE = Path("output/trade_records.csv")
+
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v2.2.0",
+    page_title="A股隔日T选股系统 v2.3.0",
     layout="wide"
 )
 
@@ -69,8 +73,7 @@ def run_script(script_name: str) -> tuple[bool, str, str]:
             errors="ignore",
         )
 
-        success = result.returncode == 0
-        return success, result.stdout or "", result.stderr or ""
+        return result.returncode == 0, result.stdout or "", result.stderr or ""
 
     except Exception as e:
         return False, "", str(e)
@@ -203,6 +206,45 @@ def keep_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return df[existing].copy()
 
 
+def load_bought_codes(
+    trade_record_df: pd.DataFrame,
+    review_df: pd.DataFrame,
+) -> set[str]:
+    """
+    已买入股票识别：
+    1. 优先读取 output/trade_records.csv
+    2. 如果没有，则从复盘案例库读取
+    """
+
+    bought_codes = set()
+
+    if not trade_record_df.empty and "股票代码" in trade_record_df.columns:
+        bought_codes.update(
+            trade_record_df["股票代码"].astype(str).str.zfill(6).tolist()
+        )
+
+    if not review_df.empty and "股票代码" in review_df.columns:
+        bought_codes.update(
+            review_df["股票代码"].astype(str).str.zfill(6).tolist()
+        )
+
+    return bought_codes
+
+
+def add_bought_flag(df: pd.DataFrame, bought_codes: set[str]) -> pd.DataFrame:
+    if df.empty or "股票代码" not in df.columns:
+        return df
+
+    df = df.copy()
+    df["是否已买入"] = df["股票代码"].astype(str).str.zfill(6).isin(bought_codes)
+    df["是否已买入"] = df["是否已买入"].map({True: "是", False: "否"})
+
+    df["_buy_rank"] = df["是否已买入"].map({"是": 0, "否": 1})
+    df = df.sort_values("_buy_rank").drop(columns=["_buy_rank"])
+
+    return df.reset_index(drop=True)
+
+
 def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -256,7 +298,7 @@ def get_market_summary(market_df: pd.DataFrame) -> dict:
             "市场环境": "-",
             "是否允许隔夜": "-",
             "建议仓位": "-",
-            "交易建议": "-",
+            "资金流入方向": "-",
         }
 
     row = market_df.iloc[0]
@@ -265,7 +307,7 @@ def get_market_summary(market_df: pd.DataFrame) -> dict:
         "市场环境": str(row.get("市场环境", "-")),
         "是否允许隔夜": str(row.get("是否允许隔夜", "-")),
         "建议仓位": str(row.get("建议仓位", "-")),
-        "交易建议": str(row.get("交易建议", "-")),
+        "资金流入方向": str(row.get("资金流入方向", "-")),
     }
 
 
@@ -285,14 +327,14 @@ def show_top_metrics(
         st.metric("市场环境", market["市场环境"])
 
     with col2:
-        st.metric("是否允许隔夜", market["是否允许隔夜"])
+        st.metric("是否隔夜", market["是否允许隔夜"])
 
     with col3:
         if not final_df.empty and "隔夜建议等级" in final_df.columns:
             count = final_df[final_df["隔夜建议等级"].isin(["A", "B"])].shape[0]
         else:
             count = 0
-        st.metric("A/B 候选", count)
+        st.metric("A/B候选", count)
 
     with col4:
         st.metric("卖点信号", len(sell_df) if not sell_df.empty else 0)
@@ -303,21 +345,23 @@ def show_top_metrics(
     with col6:
         if not next_df.empty and "是否验证成功" in next_df.columns:
             success_rate = next_df["是否验证成功"].astype(str).eq("是").mean() * 100
-            st.metric("验证成功率", f"{success_rate:.1f}%")
+            st.metric("成功率", f"{success_rate:.1f}%")
         else:
-            st.metric("验证成功率", "-")
+            st.metric("成功率", "-")
 
     with col7:
         st.metric("复盘案例", len(review_df) if not review_df.empty else 0)
+
+    st.caption(f"资金流入方向：{market['资金流入方向']}")
 
 
 # =========================
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v2.2.0")
+st.title("A股隔日T选股系统 v2.3.0")
 
-st.caption("精简版：市场环境 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 因子表现 → 人工复盘")
+st.caption("精简版：市场环境 → 板块资金 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 复盘")
 
 st.divider()
 
@@ -360,19 +404,25 @@ st.divider()
 # =========================
 
 market_df = load_csv(MARKET_ENV_FILE)
+sector_flow_df = load_csv(SECTOR_FLOW_FILE)
+
 final_df = load_csv(FINAL_WATCHLIST_FILE)
 sell_signal_df = load_csv(SELL_SIGNAL_FILE)
 lunch_df = load_csv(LUNCH_REVIEW_FILE)
 next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
 review_cases_df = load_jsonl(REVIEW_CASES_FILE)
+trade_record_df = load_csv(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
 market_md = load_markdown(MARKET_ENV_MD_FILE)
+sector_flow_md = load_markdown(SECTOR_FLOW_MD_FILE)
 sell_signal_md = load_markdown(SELL_SIGNAL_MD_FILE)
 lunch_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
 review_cases_md = load_markdown(REVIEW_CASES_MD_FILE)
+
+bought_codes = load_bought_codes(trade_record_df, review_cases_df)
 
 show_top_metrics(
     market_df=market_df,
@@ -401,35 +451,53 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 
 with tab1:
-    st.subheader("市场环境判断")
+    st.subheader("市场环境与板块资金")
 
     if market_md:
-        st.markdown(market_md)
+        with st.expander("展开市场环境原始报告", expanded=False):
+            st.markdown(market_md)
     else:
         st.warning("暂无市场环境报告，请先点击【市场环境】按钮。")
+
+    st.divider()
+
+    sector_core_df = keep_columns(
+        sector_flow_df,
+        [
+            "资金排名",
+            "板块名称",
+            "板块涨跌幅",
+            "主力净流入",
+            "主力净流入占比",
+            "板块资金标签",
+            "隔夜建议",
+        ],
+    )
+
+    show_table("板块资金方向", sector_core_df.head(15))
+
+    st.info("规则：资金没有明显流入的板块，不做对应板块隔夜；同一板块最多选1只；高Beta板块弱市降权。")
 
 
 with tab2:
     st.subheader("明日交易池")
 
     st.markdown("""
-### 尾盘确认关键字段
+### 核心字段说明
 
-| 字段 | 含义 | 怎么看 |
-|---|---|---|
-| 隔夜建议等级 | 最终是否适合隔夜 | 只优先看 A/B |
-| 风险等级 | 当前个股风险 | 优先低风险 |
-| 尾盘评分 | 只看尾盘资金和分时强度 | 越高越好 |
-| 最终评分 | 日线评分 + 尾盘评分 + 风控结果 | 越高越好 |
-| 分时结构标签 | 全天/尾盘分时形态 | 优先强势横盘、尾盘资金回流 |
-| 尾盘抢筹标签 | 14:30 后资金态度 | 优先尾盘抢筹、尾盘资金回流 |
-| 隔夜建议说明 | 系统给出的操作解释 | 用于人工复核 |
+| 字段 | 怎么看 |
+|---|---|
+| 隔夜建议等级 | 只优先看 A/B |
+| 风险等级 | 优先低风险 |
+| 最终评分 | 越高越优先 |
+| 分时结构标签 | 优先强势横盘、尾盘资金回流 |
+| 尾盘抢筹标签 | 优先尾盘抢筹、资金回流 |
+| 所属板块 | 必须结合板块资金方向 |
 """)
 
-    st.divider()
-
     if daily_plan_md:
-        st.markdown(daily_plan_md)
+        with st.expander("展开交易计划原始报告", expanded=False):
+            st.markdown(daily_plan_md)
     else:
         st.warning("暂无交易计划，请先点击【一键主流程】。")
 
@@ -438,9 +506,7 @@ with tab2:
     final_df = sort_final_watchlist(final_df)
 
     if not final_df.empty and "隔夜建议等级" in final_df.columns:
-        trade_df = final_df[
-            final_df["隔夜建议等级"].isin(["A", "B"])
-        ].copy()
+        trade_df = final_df[final_df["隔夜建议等级"].isin(["A", "B"])].copy()
     else:
         trade_df = final_df.copy()
 
@@ -453,18 +519,14 @@ with tab2:
             "所属板块",
             "风险等级",
             "隔夜建议等级",
-            "候选评分",
-            "尾盘评分",
             "最终评分",
             "分时结构标签",
             "尾盘抢筹标签",
-            "今日涨跌幅",
-            "收盘位置",
-            "从低点修复幅度",
-            "尾盘放量倍数",
             "隔夜建议说明",
         ],
     )
+
+    trade_df = add_bought_flag(trade_df, bought_codes)
 
     show_table("尾盘确认后的 A/B 核心候选", trade_df)
 
@@ -473,7 +535,8 @@ with tab3:
     st.subheader("卖点信号")
 
     if sell_signal_md:
-        st.markdown(sell_signal_md)
+        with st.expander("展开卖点信号原始报告", expanded=False):
+            st.markdown(sell_signal_md)
     else:
         st.warning("暂无卖点信号，请点击【卖点信号】按钮。")
 
@@ -489,7 +552,6 @@ with tab3:
             "参考价",
             "当前价",
             "当前涨幅",
-            "最高涨幅",
             "高点回撤",
             "冲高保持率",
             "保持率标签",
@@ -499,6 +561,8 @@ with tab3:
         ],
     )
 
+    sell_core_df = add_bought_flag(sell_core_df, bought_codes)
+
     show_table("卖点核心信号", sell_core_df)
 
 
@@ -506,7 +570,8 @@ with tab4:
     st.subheader("午盘验证")
 
     if lunch_md:
-        st.markdown(lunch_md)
+        with st.expander("展开午盘验证原始报告", expanded=False):
+            st.markdown(lunch_md)
     else:
         st.warning("暂无午盘验证报告，请在 11:20 后点击【午盘验证】。")
 
@@ -519,7 +584,6 @@ with tab4:
             "股票名称",
             "隔夜建议等级",
             "最终评分",
-            "上午最高涨幅",
             "午盘涨幅",
             "上午最大回撤",
             "冲高保持率",
@@ -530,6 +594,8 @@ with tab4:
         ],
     )
 
+    lunch_core_df = add_bought_flag(lunch_core_df, bought_codes)
+
     show_table("午盘核心结果", lunch_core_df)
 
 
@@ -537,7 +603,8 @@ with tab5:
     st.subheader("次日验证")
 
     if next_md:
-        st.markdown(next_md)
+        with st.expander("展开次日验证原始报告", expanded=False):
+            st.markdown(next_md)
     else:
         st.warning("暂无次日验证报告，请次日收盘后运行。")
 
@@ -552,7 +619,6 @@ with tab5:
             "分时结构标签",
             "尾盘抢筹标签",
             "买入参考价",
-            "次日最高涨幅",
             "次日收盘涨幅",
             "是否达到1%",
             "是否达到2%",
@@ -561,7 +627,17 @@ with tab5:
         ],
     )
 
-    show_table("次日验证明细", next_core_df)
+    next_core_df = add_bought_flag(next_core_df, bought_codes)
+
+    if not next_core_df.empty and "是否验证成功" in next_core_df.columns:
+        success_df = next_core_df[next_core_df["是否验证成功"].astype(str).eq("是")].copy()
+        failed_df = next_core_df[~next_core_df["是否验证成功"].astype(str).eq("是")].copy()
+    else:
+        success_df = pd.DataFrame()
+        failed_df = next_core_df.copy()
+
+    show_table("验证成功", success_df)
+    show_table("验证失败 / 待优化", failed_df)
 
 
 with tab6:
@@ -578,7 +654,6 @@ with tab6:
             "达到1%率",
             "达到2%率",
             "止损率",
-            "平均最高涨幅",
             "平均收盘涨幅",
         ],
     )
@@ -590,7 +665,8 @@ with tab7:
     st.subheader("人工复盘案例库")
 
     if review_cases_md:
-        st.markdown(review_cases_md)
+        with st.expander("展开复盘原始报告", expanded=False):
+            st.markdown(review_cases_md)
     else:
         st.warning("暂无复盘案例库，请点击【生成复盘库】按钮。")
 
