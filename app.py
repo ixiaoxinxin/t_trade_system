@@ -2,15 +2,16 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v2.3.0 Streamlit 精简版
+A股隔日T选股系统 v2.3.1 Streamlit 精简版
 
 升级点：
-1. 页面降噪，删除高低点/最高涨幅/最低涨幅等冗余展示
+1. 页面继续降噪，删除高低点/最高涨幅/最低涨幅等冗余展示
 2. 次日验证拆分为：验证成功 / 验证失败或待优化
 3. 已购买股票优先展示
 4. 市场环境增加板块资金方向展示
 5. 原始 Markdown 报告默认折叠
 6. 人工复盘案例库动态读取
+7. 卖点信号、午盘验证、次日验证字段进一步精简
 """
 
 from pathlib import Path
@@ -54,7 +55,7 @@ TRADE_RECORD_FILE = Path("output/trade_records.csv")
 
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v2.3.0",
+    page_title="A股隔日T选股系统 v2.3.1",
     layout="wide"
 )
 
@@ -210,12 +211,6 @@ def load_bought_codes(
     trade_record_df: pd.DataFrame,
     review_df: pd.DataFrame,
 ) -> set[str]:
-    """
-    已买入股票识别：
-    1. 优先读取 output/trade_records.csv
-    2. 如果没有，则从复盘案例库读取
-    """
-
     bought_codes = set()
 
     if not trade_record_df.empty and "股票代码" in trade_record_df.columns:
@@ -236,13 +231,18 @@ def add_bought_flag(df: pd.DataFrame, bought_codes: set[str]) -> pd.DataFrame:
         return df
 
     df = df.copy()
+
+    if "是否已买入" in df.columns:
+        df = df.drop(columns=["是否已买入"])
+
     df["是否已买入"] = df["股票代码"].astype(str).str.zfill(6).isin(bought_codes)
     df["是否已买入"] = df["是否已买入"].map({True: "是", False: "否"})
 
     df["_buy_rank"] = df["是否已买入"].map({"是": 0, "否": 1})
     df = df.sort_values("_buy_rank").drop(columns=["_buy_rank"])
 
-    return df.reset_index(drop=True)
+    cols = ["是否已买入"] + [col for col in df.columns if col != "是否已买入"]
+    return df[cols].reset_index(drop=True)
 
 
 def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
@@ -359,7 +359,7 @@ def show_top_metrics(
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v2.3.0")
+st.title("A股隔日T选股系统 v2.3.1")
 
 st.caption("精简版：市场环境 → 板块资金 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 复盘")
 
@@ -547,15 +547,10 @@ with tab3:
         [
             "股票代码",
             "股票名称",
-            "隔夜等级",
             "市场环境",
             "参考价",
-            "当前价",
-            "当前涨幅",
-            "高点回撤",
-            "冲高保持率",
-            "保持率标签",
-            "均线状态",
+            "分时均价",
+            "盘中最高",
             "卖出信号",
             "卖出理由",
         ],
@@ -585,10 +580,6 @@ with tab4:
             "隔夜建议等级",
             "最终评分",
             "午盘涨幅",
-            "上午最大回撤",
-            "冲高保持率",
-            "回撤风险等级",
-            "冲高质量标签",
             "上午结构标签",
             "下午操作建议",
         ],
