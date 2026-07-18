@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T交易计划生成器 v1.9.2
+A股隔日T交易计划生成器 v2.0
 
 升级点：
 1. 优先读取 output/final_watchlist.csv
@@ -17,7 +17,9 @@ from datetime import datetime
 import json
 
 import pandas as pd
-import yaml
+
+from common import PRODUCT_VERSION, load_yaml_config, normalize_code, safe_float
+from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns, validate_market_environment
 
 
 CONFIG_FILE = Path("config.yaml")
@@ -37,24 +39,7 @@ def load_config() -> dict:
         }
     }
 
-    if not CONFIG_FILE.exists():
-        return default_config
-
-    try:
-        with CONFIG_FILE.open("r", encoding="utf-8") as f:
-            user_config = yaml.safe_load(f) or {}
-
-        for section, values in default_config.items():
-            if section not in user_config:
-                user_config[section] = values
-            else:
-                for key, value in values.items():
-                    user_config[section].setdefault(key, value)
-
-        return user_config
-
-    except Exception:
-        return default_config
+    return load_yaml_config(CONFIG_FILE, default_config)
 
 
 CONFIG = load_config()
@@ -82,7 +67,9 @@ def load_market_environment() -> dict:
         return default_env
 
     try:
-        return json.loads(MARKET_ENV_FILE.read_text(encoding="utf-8"))
+        env = json.loads(MARKET_ENV_FILE.read_text(encoding="utf-8"))
+        validate_market_environment(env)
+        return env
     except Exception:
         return default_env
 
@@ -90,20 +77,13 @@ def load_market_environment() -> dict:
 MARKET_ENV = load_market_environment()
 
 
-def safe_float(value, default=0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def normalize_code(code) -> str:
-    return str(code).zfill(6)
-
-
 def read_source_data() -> tuple[pd.DataFrame, str]:
     if FINAL_WATCHLIST_FILE.exists():
-        df = pd.read_csv(FINAL_WATCHLIST_FILE, dtype={"股票代码": str})
+        df = validate_csv_columns(
+            FINAL_WATCHLIST_FILE,
+            FINAL_WATCHLIST_REQUIRED_COLUMNS,
+            "final_watchlist.csv",
+        )
         return df, str(FINAL_WATCHLIST_FILE)
 
     if CANDIDATES_FILE.exists():
@@ -119,7 +99,6 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     df["股票代码"] = df["股票代码"].astype(str).str.zfill(6)
 
     default_cols = {
-        "热点标签": "未归类",
         "候选评分": 0,
         "尾盘评分": 0,
         "最终评分": df["综合评分"] if "综合评分" in df.columns else 0,
@@ -268,7 +247,6 @@ def build_plan_row(row: pd.Series) -> dict:
     return {
         "股票代码": normalize_code(row.get("股票代码", "")),
         "股票名称": str(row.get("股票名称", "")),
-        "热点标签": str(row.get("热点标签", "")),
         "候选评分": f"{safe_float(row.get('候选评分', 0)):.2f}",
         "尾盘评分": f"{safe_float(row.get('尾盘评分', 0)):.2f}",
         "最终评分": f"{safe_float(row.get('最终评分', 0)):.2f}",
@@ -288,7 +266,6 @@ def make_markdown_table(rows: list[dict]) -> str:
     headers = [
         "股票代码",
         "股票名称",
-        "热点标签",
         "候选评分",
         "尾盘评分",
         "最终评分",
@@ -365,7 +342,7 @@ def generate_daily_plan() -> None:
     else:
         trade_summary = f"明日交易池共 {len(trade_df)} 只，最多只做 {MAX_TRADE_COUNT} 只。"
 
-    md = f"""# A股隔日T交易计划 v1.9.2
+    md = f"""# A股隔日T交易计划 v{PRODUCT_VERSION}
 
 生成日期：{today}
 

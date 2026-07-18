@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T系统 v1.7.0：次日验证系统
+A股隔日T系统 v2.0：次日验证系统
 
 功能：
 1. 读取 output/final_watchlist.csv
@@ -21,6 +21,8 @@ from datetime import datetime
 import pandas as pd
 
 from data_provider import get_stock_daily
+from common import normalize_code, safe_float
+from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
 
 
 INPUT_FILE = Path("output/final_watchlist.csv")
@@ -28,17 +30,6 @@ OUTPUT_REVIEW_CSV = Path("output/next_day_review.csv")
 OUTPUT_REVIEW_MD = Path("output/next_day_review.md")
 OUTPUT_FACTOR_CSV = Path("output/factor_performance.csv")
 HISTORY_DIR = Path("history")
-
-
-def safe_float(value, default=0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def normalize_code(code) -> str:
-    return str(code).zfill(6)
 
 
 def standardize_daily_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -79,6 +70,33 @@ def standardize_daily_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("date").reset_index(drop=True)
 
     return df
+
+
+def get_plan_buy_range(row: pd.Series, reference_price: float) -> tuple[float, float]:
+    ma5 = safe_float(row.get("MA5", 0))
+
+    if ma5 > 0:
+        return ma5 * 0.99, ma5 * 1.01
+
+    return reference_price * 0.98, reference_price * 0.99
+
+
+def classify_execution_result(
+    *,
+    touched_buy_range: bool,
+    hit_1pct_after_plan_buy: bool,
+    stop_loss_hit_after_plan_buy: bool,
+) -> str:
+    if not touched_buy_range:
+        return "未给买点"
+
+    if stop_loss_hit_after_plan_buy:
+        return "风险触发"
+
+    if hit_1pct_after_plan_buy:
+        return "给买点且成功"
+
+    return "给买点但失败"
 
 
 def get_next_day_daily(symbol: str, confirm_date: str | None = None) -> pd.Series | None:
@@ -152,20 +170,32 @@ def calculate_review(row: pd.Series) -> dict | None:
     low_pct = (next_low - buy_ref_price) / buy_ref_price * 100
     close_pct = (next_close - buy_ref_price) / buy_ref_price * 100
 
-    hit_1pct = high_pct >= 1
-    hit_2pct = high_pct >= 2
-    stop_loss_hit = low_pct <= -2
+    plan_buy_low, plan_buy_high = get_plan_buy_range(row, buy_ref_price)
+    plan_buy_price = plan_buy_high
+    touched_buy_range = next_low <= plan_buy_high and next_high >= plan_buy_low
+    plan_stop_loss_price = plan_buy_price * 0.98
+    plan_target_1_price = plan_buy_price * 1.01
+    plan_target_2_price = plan_buy_price * 1.02
 
-    # 当前版本成功标准：
-    # 1. 次日最高涨幅 >= 1%，代表有可T空间
-    # 2. 且没有先跌破 -2%
-    success = hit_1pct and not stop_loss_hit
+    hit_1pct = next_high >= buy_ref_price * 1.01
+    hit_2pct = next_high >= buy_ref_price * 1.02
+    stop_loss_hit = next_low <= buy_ref_price * 0.98
+
+    hit_1pct_after_plan_buy = touched_buy_range and next_high >= plan_target_1_price
+    hit_2pct_after_plan_buy = touched_buy_range and next_high >= plan_target_2_price
+    stop_loss_hit_after_plan_buy = touched_buy_range and next_low <= plan_stop_loss_price
+
+    execution_result = classify_execution_result(
+        touched_buy_range=touched_buy_range,
+        hit_1pct_after_plan_buy=hit_1pct_after_plan_buy,
+        stop_loss_hit_after_plan_buy=stop_loss_hit_after_plan_buy,
+    )
+    success = execution_result == "给买点且成功"
 
     result = {
         "验证日期": datetime.now().strftime("%Y-%m-%d"),
         "股票代码": symbol,
         "股票名称": name,
-        "热点标签": row.get("热点标签", ""),
         "分时结构标签": row.get("分时结构标签", ""),
         "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
         "隔夜建议等级": row.get("隔夜建议等级", ""),
@@ -173,6 +203,10 @@ def calculate_review(row: pd.Series) -> dict | None:
         "尾盘评分": safe_float(row.get("尾盘评分", 0)),
         "最终评分": safe_float(row.get("最终评分", 0)),
         "买入参考价": round(buy_ref_price, 2),
+        "计划低吸下限": round(plan_buy_low, 2),
+        "计划低吸上限": round(plan_buy_high, 2),
+        "计划验证买入价": round(plan_buy_price, 2),
+        "计划止损价": round(plan_stop_loss_price, 2),
         "次日日期": str(pd.to_datetime(next_date).date()) if pd.notna(next_date) else "",
         "次日开盘": round(next_open, 2),
         "次日最高": round(next_high, 2),
@@ -185,6 +219,12 @@ def calculate_review(row: pd.Series) -> dict | None:
         "是否达到1%": "是" if hit_1pct else "否",
         "是否达到2%": "是" if hit_2pct else "否",
         "是否触发-2%止损": "是" if stop_loss_hit else "否",
+        "是否触达低吸区间": "是" if touched_buy_range else "否",
+        "触达后是否达到1%": "是" if hit_1pct_after_plan_buy else "否",
+        "触达后是否达到2%": "是" if hit_2pct_after_plan_buy else "否",
+        "触达后是否触发-2%止损": "是" if stop_loss_hit_after_plan_buy else "否",
+        "执行验证结果": execution_result,
+        "时序判断": "日线OHLC无法确认高低点先后，按计划买入价做保守验证。",
         "是否验证成功": "是" if success else "否",
     }
 
@@ -214,12 +254,14 @@ def summarize_by_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
         止损数量=("止损数", "sum"),
         平均最高涨幅=("次日最高涨幅", "mean"),
         平均收盘涨幅=("次日收盘涨幅", "mean"),
+        触达低吸数量=("是否触达低吸区间", lambda s: s.astype(str).eq("是").sum()),
     ).reset_index()
 
     summary["成功率"] = summary["成功数"] / summary["数量"] * 100
     summary["达到1%率"] = summary["达到1数量"] / summary["数量"] * 100
     summary["达到2%率"] = summary["达到2数量"] / summary["数量"] * 100
     summary["止损率"] = summary["止损数量"] / summary["数量"] * 100
+    summary["触达低吸率"] = summary["触达低吸数量"] / summary["数量"] * 100
 
     numeric_cols = [
         "成功率",
@@ -228,6 +270,7 @@ def summarize_by_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
         "止损率",
         "平均最高涨幅",
         "平均收盘涨幅",
+        "触达低吸率",
     ]
 
     for c in numeric_cols:
@@ -254,7 +297,7 @@ def build_markdown(review_df: pd.DataFrame, grade_summary: pd.DataFrame, structu
     hit_2_rate = hit_2_count / total * 100 if total else 0
     stop_rate = stop_count / total * 100 if total else 0
 
-    md = f"""# 次日验证报告 v1.7.0
+    md = f"""# 次日验证报告 v2.0
 
 生成日期：{today}
 
@@ -300,10 +343,11 @@ def build_markdown(review_df: pd.DataFrame, grade_summary: pd.DataFrame, structu
 
 当前成功标准：
 
-1. 次日最高涨幅达到 `1%`
-2. 且没有触发 `-2%` 止损
+1. 次日行情触达计划低吸区间
+2. 按计划低吸上限作为保守买入价后，盘中最高达到 `1%`
+3. 触达后未按该计划买入价触发 `-2%` 止损
 
-后续可以根据实盘结果调整成功标准。
+说明：日线 OHLC 无法确认高低点发生先后，本报告只验证“计划是否给到可执行价格”和“给买点后的保守收益/风险空间”，真实执行结果仍需结合成交记录。
 """
 
     return md
@@ -337,12 +381,13 @@ def run_next_day_validation() -> None:
     if not INPUT_FILE.exists():
         raise FileNotFoundError(f"找不到尾盘确认文件：{INPUT_FILE}")
 
-    watchlist = pd.read_csv(INPUT_FILE, dtype={"股票代码": str})
+    watchlist = validate_csv_columns(
+        INPUT_FILE,
+        FINAL_WATCHLIST_REQUIRED_COLUMNS,
+        "final_watchlist.csv",
+    )
 
-    if watchlist.empty:
-        raise ValueError("final_watchlist.csv 为空，无法验证")
-
-    watchlist["股票代码"] = watchlist["股票代码"].astype(str).str.zfill(6)
+    watchlist["股票代码"] = watchlist["股票代码"].apply(normalize_code)
 
     results = []
     failed = []

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T系统 v1.9.1：午盘验证系统
+A股隔日T系统 v2.0：午盘验证系统
 
 新增：
 1. 上午最大回撤
@@ -22,6 +22,8 @@ from datetime import datetime
 import pandas as pd
 
 from data_provider import get_stock_minute
+from common import normalize_code, safe_float
+from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
 
 
 INPUT_FILE = Path("output/final_watchlist.csv")
@@ -41,17 +43,6 @@ CONFIG = {
     "true_strength_keep_ratio": 60.0,
     "normal_keep_ratio": 30.0,
 }
-
-
-def safe_float(value, default=0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def normalize_code(code) -> str:
-    return str(code).zfill(6)
 
 
 def standardize_minute_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -283,7 +274,6 @@ def calculate_lunch_review(row: pd.Series) -> dict | None:
         "验证时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "股票代码": symbol,
         "股票名称": name,
-        "热点标签": row.get("热点标签", ""),
         "隔夜建议等级": row.get("隔夜建议等级", ""),
         "分时结构标签": row.get("分时结构标签", ""),
         "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
@@ -319,7 +309,7 @@ def build_markdown(review_df: pd.DataFrame) -> str:
     hit_2_count = review_df["是否达到2%"].eq("是").sum()
     stop_count = review_df["是否触发-2%止损"].eq("是").sum()
 
-    md = f"""# 午盘验证报告 v1.9.1
+    md = f"""# 午盘验证报告 v2.0
 
 生成时间：{now}
 
@@ -378,12 +368,13 @@ def run_lunch_validation() -> None:
     if not INPUT_FILE.exists():
         raise FileNotFoundError(f"找不到尾盘确认文件：{INPUT_FILE}")
 
-    watchlist = pd.read_csv(INPUT_FILE, dtype={"股票代码": str})
+    watchlist = validate_csv_columns(
+        INPUT_FILE,
+        FINAL_WATCHLIST_REQUIRED_COLUMNS,
+        "final_watchlist.csv",
+    )
 
-    if watchlist.empty:
-        raise ValueError("final_watchlist.csv 为空，无法午盘验证")
-
-    watchlist["股票代码"] = watchlist["股票代码"].astype(str).str.zfill(6)
+    watchlist["股票代码"] = watchlist["股票代码"].apply(normalize_code)
 
     if "隔夜建议等级" in watchlist.columns:
         watchlist = watchlist[watchlist["隔夜建议等级"].isin(CONFIG["include_grades"])].copy()

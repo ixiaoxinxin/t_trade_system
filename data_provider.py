@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-v1.4.1-data-source 数据源重构
+v2.0-data-source 数据源重构
 
 优先级：
 1. 新浪

@@ -1,5 +1,12 @@
-from strategy_overnight_t import select_overnight_t_stocks
+# -*- coding: utf-8 -*-
 
-df = select_overnight_t_stocks()
+from strategy_overnight_t import run_strategy
 
-print(df.head(20))
+
+def main() -> None:
+    df = run_strategy(max_count=20)
+    print(df.head(20))
+
+
+if __name__ == "__main__":
+    main()

@@ -8,8 +8,11 @@ import json
 
 import pandas as pd
 
+from common import load_yaml_config
+
 
 OUTPUT_DIR = Path("output")
+CONFIG_FILE = Path("config.yaml")
 
 OUTPUT_CSV = OUTPUT_DIR / "market_environment.csv"
 OUTPUT_MD = OUTPUT_DIR / "market_environment.md"
@@ -26,11 +29,17 @@ INDEX_MAP = {
 }
 
 
-CONFIG = {
+DEFAULT_CONFIG = {
     "top_sector_count": 10,
     "avoid_sector_count": 10,
     "sector_hot_min_inflow": 0,
 }
+
+
+CONFIG = load_yaml_config(CONFIG_FILE, {"market_environment": DEFAULT_CONFIG}).get(
+    "market_environment",
+    DEFAULT_CONFIG,
+)
 
 
 def safe_float(value, default=0.0) -> float:
@@ -243,7 +252,7 @@ def build_market_markdown(index_df: pd.DataFrame, sector_df: pd.DataFrame, env_r
     top_sector_df = sector_df.head(CONFIG["top_sector_count"]) if not sector_df.empty else pd.DataFrame()
     avoid_sector_df = sector_df.tail(CONFIG["avoid_sector_count"]) if not sector_df.empty else pd.DataFrame()
 
-    md = f"""# 市场环境报告 v2.3.0
+    md = f"""# 市场环境报告 v2.0
 
 生成时间：{now}
 
@@ -299,7 +308,7 @@ def export_sector_markdown(sector_df: pd.DataFrame) -> None:
         SECTOR_FLOW_MD.write_text("# 板块资金流\n\n暂无数据。", encoding="utf-8")
         return
 
-    md = f"""# 板块资金流 v2.3.0
+    md = f"""# 板块资金流 v2.0
 
 生成时间：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 

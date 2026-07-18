@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v2.3.1 Streamlit 精简版
+A股隔日T选股系统 v2.0 Streamlit 精简版
 
 升级点：
 1. 页面继续降噪，删除高低点/最高涨幅/最低涨幅等冗余展示
@@ -55,7 +55,7 @@ TRADE_RECORD_FILE = Path("output/trade_records.csv")
 
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v2.3.1",
+    page_title="A股隔日T选股系统 v2.0",
     layout="wide"
 )
 
@@ -359,9 +359,9 @@ def show_top_metrics(
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v2.3.1")
+st.title("A股隔日T选股系统 v2.0")
 
-st.caption("精简版：市场环境 → 板块资金 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 复盘")
+st.caption("精简版：市场环境 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 复盘")
 
 st.divider()
 
@@ -451,32 +451,13 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 
 with tab1:
-    st.subheader("市场环境与板块资金")
+    st.subheader("市场环境")
 
     if market_md:
         with st.expander("展开市场环境原始报告", expanded=False):
             st.markdown(market_md)
     else:
         st.warning("暂无市场环境报告，请先点击【市场环境】按钮。")
-
-    st.divider()
-
-    sector_core_df = keep_columns(
-        sector_flow_df,
-        [
-            "资金排名",
-            "板块名称",
-            "板块涨跌幅",
-            "主力净流入",
-            "主力净流入占比",
-            "板块资金标签",
-            "隔夜建议",
-        ],
-    )
-
-    show_table("板块资金方向", sector_core_df.head(15))
-
-    st.info("规则：资金没有明显流入的板块，不做对应板块隔夜；同一板块最多选1只；高Beta板块弱市降权。")
 
 
 with tab2:
@@ -492,7 +473,6 @@ with tab2:
 | 最终评分 | 越高越优先 |
 | 分时结构标签 | 优先强势横盘、尾盘资金回流 |
 | 尾盘抢筹标签 | 优先尾盘抢筹、资金回流 |
-| 所属板块 | 必须结合板块资金方向 |
 """)
 
     if daily_plan_md:
@@ -515,8 +495,6 @@ with tab2:
         [
             "股票代码",
             "股票名称",
-            "热点标签",
-            "所属板块",
             "风险等级",
             "隔夜建议等级",
             "最终评分",
@@ -610,7 +588,11 @@ with tab5:
             "分时结构标签",
             "尾盘抢筹标签",
             "买入参考价",
+            "计划低吸下限",
+            "计划低吸上限",
             "次日收盘涨幅",
+            "是否触达低吸区间",
+            "执行验证结果",
             "是否达到1%",
             "是否达到2%",
             "是否触发-2%止损",
@@ -672,7 +654,6 @@ with tab7:
             "交易类型",
             "实际盈亏",
             "市场环境",
-            "所属板块",
             "系统结构",
             "系统结论",
         ],

@@ -1,0 +1,56 @@
+capital:
+  total_capital: 30000
+  single_stock_min: 3000
+  single_stock_max: 5000
+  max_trade_count: 2
+
+stock_filter:
+  min_price: 30
+  max_price: 50
+  min_amount: 500000000
+  min_amplitude_5d: 10
+  max_rise_5d: 20
+  max_ma5_deviation: 10
+
+score_weight:
+  daily_score_weight: 0.4
+  tail_score_weight: 0.6
+
+tail_confirm:
+  high_close_position: 0.75
+  mid_close_position: 0.6
+  weak_close_position: 0.4
+  morning_break_threshold: 1.015
+  repair_threshold: 2.0
+
+risk:
+  max_rise_5d_warning: 18
+  max_amplitude_5d_warning: 35
+  high_risk_ma5_deviation: 8
+
+runtime:
+  top_n_tail_confirm: 20
+  enable_cache: true
+  cache_dir: cache
+
+market_environment:
+  top_sector_count: 10
+  avoid_sector_count: 10
+  sector_hot_min_inflow: 0
+
+sell_signal:
+  include_grades:
+    - A
+    - B
+  take_profit_1: 1.0
+  take_profit_2: 2.0
+  strong_take_profit: 3.0
+  stop_loss: -2.0
+  pullback_warn: 1.5
+  pullback_sell: 2.0
+  keep_ratio_strong: 70.0
+  keep_ratio_normal: 50.0
+  keep_ratio_weak: 30.0
+  pushplus:
+    enabled: true
+    url: https://www.pushplus.plus/send

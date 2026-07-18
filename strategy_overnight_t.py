@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v1.6.1
+A股隔日T选股系统 v2.0
 
 本版本目标：
 1. 接入 config.yaml
@@ -15,7 +15,7 @@ A股隔日T选股系统 v1.6.1
    - 风险等级
    - 策略类型
    - 买入优先级
-5. 保留板块/热点标签增强逻辑
+5. v2.0 去掉轻量板块/热点标签识别逻辑
 """
 
 from pathlib import Path
@@ -26,7 +26,7 @@ import pandas as pd
 import yaml
 
 from data_provider import get_all_stocks, get_stock_daily
-from sector_mapper import enrich_candidates_with_sector, print_sector_stats
+from common import PRODUCT_VERSION, normalize_code
 
 
 CONFIG_FILE = Path("config.yaml")
@@ -700,8 +700,6 @@ def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame,
                 "股票代码": symbol,
                 "股票名称": name,
                 "所属市场": get_market_type(symbol),
-                "所属板块": "未知",
-                "热点标签": "未归类",
                 "最新收盘价": round(close_price, 2),
                 "MA5": round(ma5, 2),
                 "距MA5偏离率": round(ma5_deviation, 2),
@@ -744,34 +742,6 @@ def scan_overnight_t_stocks(max_count: int | None = None) -> tuple[pd.DataFrame,
     return candidates_df, stock_df
 
 
-def recalculate_after_sector(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    板块/热点标签增强后，保留当前候选评分。
-    后续版本可在这里加入板块热度加分。
-    """
-
-    if df.empty:
-        return df
-
-    df = df.copy()
-
-    # 热点标签未归类的轻微降权
-    if "热点标签" in df.columns:
-        unknown_mask = df["热点标签"].astype(str).isin(["未归类", "未知", "未标记", ""])
-        df.loc[unknown_mask, "候选评分"] = df.loc[unknown_mask, "候选评分"] - 5
-        df.loc[unknown_mask, "综合评分"] = df.loc[unknown_mask, "候选评分"]
-
-    df["候选评分"] = df["候选评分"].clip(lower=0)
-    df["综合评分"] = df["候选评分"]
-
-    df = df.sort_values(
-        by=["买入优先级", "候选评分"],
-        ascending=[True, False]
-    ).reset_index(drop=True)
-
-    return df
-
-
 def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     控制 CSV 字段顺序。
@@ -781,8 +751,6 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
         "股票代码",
         "股票名称",
         "所属市场",
-        "所属板块",
-        "热点标签",
         "最新收盘价",
         "MA5",
         "距MA5偏离率",
@@ -825,22 +793,13 @@ def print_score_stats(df: pd.DataFrame) -> None:
     print(df["候选评分"].describe())
 
 
-if __name__ == "__main__":
+def run_strategy(max_count: int | None = None) -> pd.DataFrame:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("开始运行 A股隔日T选股系统 v1.6.1")
+    print(f"开始运行 A股隔日T选股系统 v{PRODUCT_VERSION}")
     print(f"运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    candidates_df, stock_df = scan_overnight_t_stocks(max_count=None)
-
-    candidates_df, stats = enrich_candidates_with_sector(
-        candidates_df=candidates_df,
-        stock_df=stock_df
-    )
-
-    candidates_df = recalculate_after_sector(candidates_df)
-
-    print_sector_stats(stats)
+    candidates_df, _stock_df = scan_overnight_t_stocks(max_count=max_count)
 
     candidates_df = reorder_columns(candidates_df)
 
@@ -857,3 +816,9 @@ if __name__ == "__main__":
 
     print(f"\n结果已保存到 {OUTPUT_FILE}")
     print(f"候选股票数量：{len(candidates_df)}")
+
+    return candidates_df
+
+
+if __name__ == "__main__":
+    run_strategy(max_count=None)

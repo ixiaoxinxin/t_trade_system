@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T系统 v1.8.0：因子表现排行榜
+A股隔日T系统 v2.0：因子表现排行榜
 
 功能：
 1. 读取 output/next_day_review.csv
@@ -31,7 +31,6 @@ CONFIG = {
         "分时结构标签": "分时结构因子",
         "尾盘抢筹标签": "尾盘资金因子",
         "隔夜建议等级": "隔夜等级因子",
-        "热点标签": "热点题材因子",
     },
     "grade_rules": {
         "S": 75,
@@ -204,7 +203,7 @@ def build_markdown(rank_df: pd.DataFrame) -> str:
     today = datetime.now().strftime("%Y-%m-%d")
 
     md_lines = [
-        "# 因子表现排行榜 v1.8.0",
+        "# 因子表现排行榜 v2.0",
         "",
         f"生成日期：{today}",
         "",

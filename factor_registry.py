@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-v1.6.0 因子登记表
+v2.0 因子登记表
 
 作用：
 1. 记录当前选股系统使用了哪些因子
@@ -83,14 +83,6 @@ def get_factor_registry() -> pd.DataFrame:
             "direction": "成交额越充足越好，但超大市值慢趋势票需后续降权",
             "current_status": "已使用",
             "used_in_version": "v1.0",
-        },
-        {
-            "factor_name": "热点标签",
-            "category": "日线因子",
-            "description": "判断题材方向，辅助识别主线板块",
-            "direction": "热点标签明确优于未归类",
-            "current_status": "半可用",
-            "used_in_version": "v1.1",
         },
         {
             "factor_name": "所属市场",
@@ -319,7 +311,7 @@ def export_factor_registry() -> None:
     md_lines = [
         "# 选股因子登记表",
         "",
-        "版本：v1.6.0",
+        "版本：v2.0",
         "",
         "用途：记录当前系统使用的日线因子、分时因子、风控因子，以及未来计划加入的聚宽因子。",
         "",

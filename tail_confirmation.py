@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T系统 v1.6.2：尾盘隔夜确认系统
+A股隔日T系统 v2.0：尾盘隔夜确认系统
 
 功能：
 1. 读取 output/overnight_t_candidates.csv
@@ -472,7 +472,6 @@ def build_markdown(df: pd.DataFrame) -> str:
         cols = [
             "股票代码",
             "股票名称",
-            "热点标签",
             "候选评分",
             "尾盘评分",
             "最终评分",
@@ -488,7 +487,7 @@ def build_markdown(df: pd.DataFrame) -> str:
 
         return f"## {title}\n\n" + sub[existing_cols].to_markdown(index=False) + "\n"
 
-    md = f"""# 尾盘隔夜确认报告 v1.6.2
+    md = f"""# 尾盘隔夜确认报告 v2.0
 
 生成日期：{today}
 
@@ -567,10 +566,11 @@ def run_tail_confirmation(top_n: int = TOP_N) -> None:
         result = {
             "股票代码": symbol,
             "股票名称": name,
-            "热点标签": row_dict.get("热点标签", "未归类"),
+            "确认日期": datetime.now().strftime("%Y-%m-%d"),
             "日线评分": safe_float(row_dict.get("日线评分", candidate_score)),
             "风险扣分": safe_float(row_dict.get("风险扣分", 0)),
             "候选评分": candidate_score,
+            "风险等级": row_dict.get("风险等级", "未知"),
         }
 
         result.update(intraday_fields)

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T系统 v2.1.0：卖点引擎 + PushPlus 推送
+A股隔日T系统 v2.0：卖点引擎 + PushPlus 推送
 
 功能：
 1. 读取尾盘确认后的 A/B 核心候选
@@ -21,16 +21,19 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from data_provider import get_stock_minute
+from common import load_yaml_config, normalize_code, safe_float
+from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
 
 
 FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
 MARKET_ENV_FILE = Path("output/market_environment.json")
+CONFIG_FILE = Path("config.yaml")
 
 OUTPUT_CSV = Path("output/sell_signal.csv")
 OUTPUT_MD = Path("output/sell_signal.md")
 
 
-CONFIG = {
+DEFAULT_CONFIG = {
     "include_grades": ["A", "B"],
 
     "take_profit_1": 1.0,
@@ -54,15 +57,7 @@ CONFIG = {
 }
 
 
-def safe_float(value, default=0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def normalize_code(code) -> str:
-    return str(code).zfill(6)
+CONFIG = load_yaml_config(CONFIG_FILE, {"sell_signal": DEFAULT_CONFIG}).get("sell_signal", DEFAULT_CONFIG)
 
 
 def load_market_environment() -> dict:
@@ -340,12 +335,13 @@ def build_sell_signal() -> pd.DataFrame:
     if not FINAL_WATCHLIST_FILE.exists():
         raise FileNotFoundError(f"找不到文件：{FINAL_WATCHLIST_FILE}")
 
-    df = pd.read_csv(FINAL_WATCHLIST_FILE, dtype={"股票代码": str})
+    df = validate_csv_columns(
+        FINAL_WATCHLIST_FILE,
+        FINAL_WATCHLIST_REQUIRED_COLUMNS,
+        "final_watchlist.csv",
+    )
 
-    if df.empty:
-        raise ValueError("final_watchlist.csv 为空，无法生成卖点信号")
-
-    df["股票代码"] = df["股票代码"].astype(str).str.zfill(6)
+    df["股票代码"] = df["股票代码"].apply(normalize_code)
 
     if "隔夜建议等级" in df.columns:
         df = df[df["隔夜建议等级"].isin(CONFIG["include_grades"])].copy()
@@ -387,7 +383,7 @@ def build_markdown(signal_df: pd.DataFrame) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     if signal_df.empty:
-        return f"""# 卖点信号 v2.1.0
+        return f"""# 卖点信号 v2.0
 
 生成时间：{now}
 
@@ -411,7 +407,7 @@ def build_markdown(signal_df: pd.DataFrame) -> str:
         "卖出理由",
     ]
 
-    md = f"""# 卖点信号 v2.1.0
+    md = f"""# 卖点信号 v2.0
 
 生成时间：{now}
 
