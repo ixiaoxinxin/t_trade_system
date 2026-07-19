@@ -23,6 +23,8 @@ import json
 import pandas as pd
 import streamlit as st
 
+from trade_journal import append_trade_record, build_trade_record, load_trade_records
+
 
 # =========================
 # 文件路径
@@ -285,9 +287,14 @@ def show_table(title: str, df: pd.DataFrame) -> None:
         st.warning("暂无数据")
         return
 
+    display_df = df.copy()
+
+    for col in display_df.select_dtypes(include=["object"]).columns:
+        display_df[col] = display_df[col].fillna("").astype(str)
+
     st.dataframe(
-        df,
-        use_container_width=True,
+        display_df,
+        width="stretch",
         hide_index=True,
     )
 
@@ -318,10 +325,11 @@ def show_top_metrics(
     lunch_df: pd.DataFrame,
     next_df: pd.DataFrame,
     review_df: pd.DataFrame,
+    trade_record_df: pd.DataFrame,
 ) -> None:
     market = get_market_summary(market_df)
 
-    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+    col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
 
     with col1:
         st.metric("市场环境", market["市场环境"])
@@ -350,6 +358,9 @@ def show_top_metrics(
             st.metric("成功率", "-")
 
     with col7:
+        st.metric("交易记录", len(trade_record_df) if not trade_record_df.empty else 0)
+
+    with col8:
         st.metric("复盘案例", len(review_df) if not review_df.empty else 0)
 
     st.caption(f"资金流入方向：{market['资金流入方向']}")
@@ -374,27 +385,27 @@ st.subheader("操作区")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 with col1:
-    if st.button("市场环境", use_container_width=True):
+    if st.button("市场环境", width="stretch"):
         run_single_script_and_refresh("market_environment.py")
 
 with col2:
-    if st.button("一键主流程", use_container_width=True):
+    if st.button("一键主流程", width="stretch"):
         run_main_pipeline_and_refresh()
 
 with col3:
-    if st.button("卖点信号", use_container_width=True):
+    if st.button("卖点信号", width="stretch"):
         run_single_script_and_refresh("sell_signal_engine.py")
 
 with col4:
-    if st.button("午盘验证", use_container_width=True):
+    if st.button("午盘验证", width="stretch"):
         run_single_script_and_refresh("lunch_validator.py")
 
 with col5:
-    if st.button("次日验证", use_container_width=True):
+    if st.button("次日验证", width="stretch"):
         run_single_script_and_refresh("next_day_validator.py")
 
 with col6:
-    if st.button("生成复盘库", use_container_width=True):
+    if st.button("生成复盘库", width="stretch"):
         run_single_script_and_refresh("review_manager.py")
 
 st.divider()
@@ -412,7 +423,7 @@ lunch_df = load_csv(LUNCH_REVIEW_FILE)
 next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
 review_cases_df = load_jsonl(REVIEW_CASES_FILE)
-trade_record_df = load_csv(TRADE_RECORD_FILE)
+trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
 market_md = load_markdown(MARKET_ENV_MD_FILE)
@@ -431,6 +442,7 @@ show_top_metrics(
     lunch_df=lunch_df,
     next_df=next_df,
     review_df=review_cases_df,
+    trade_record_df=trade_record_df,
 )
 
 st.divider()
@@ -439,9 +451,10 @@ st.divider()
 # Tab 区
 # =========================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "市场环境",
     "明日交易池",
+    "交易记录",
     "卖点信号",
     "午盘验证",
     "次日验证",
@@ -536,6 +549,136 @@ with tab2:
 
 
 with tab3:
+    st.subheader("交易记录")
+
+    st.caption("随手记录日内T / 隔日T真实交易，后续作为个性化模型训练数据。卖出价可暂不填，表示仍在持仓。")
+
+    with st.form("trade_record_form", clear_on_submit=True):
+        row1_col1, row1_col2, row1_col3, row1_col4 = st.columns([1, 1, 1, 1])
+
+        with row1_col1:
+            trade_date = st.date_input("交易日期")
+
+        with row1_col2:
+            trade_type = st.selectbox("交易类型", ["隔日T", "日内T", "建仓", "减仓", "清仓", "观察记录"])
+
+        with row1_col3:
+            stock_code = st.text_input("股票代码", placeholder="例如 002378")
+
+        with row1_col4:
+            stock_name = st.text_input("股票名称", placeholder="例如 章源钨业")
+
+        row2_col1, row2_col2, row2_col3, row2_col4, row2_col5 = st.columns([1, 1, 1, 1, 1])
+
+        with row2_col1:
+            direction = st.selectbox("方向", ["买入", "卖出", "买入并卖出", "补仓", "减仓"])
+
+        with row2_col2:
+            buy_price = st.number_input("买入价格", min_value=0.0, value=0.0, step=0.01, format="%.3f")
+
+        with row2_col3:
+            sell_price = st.number_input("卖出价格", min_value=0.0, value=0.0, step=0.01, format="%.3f")
+
+        with row2_col4:
+            quantity = st.number_input("数量", min_value=0, value=100, step=100)
+
+        with row2_col5:
+            fee = st.number_input("费用", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+
+        row3_col1, row3_col2, row3_col3 = st.columns([1, 1, 1])
+
+        with row3_col1:
+            strategy_source = st.selectbox("策略来源", ["系统候选", "手动观察", "盘中机会", "复盘补录"])
+
+        with row3_col2:
+            followed_plan = st.selectbox("是否按计划执行", ["是", "否", "部分执行", "未记录"])
+
+        with row3_col3:
+            emotion = st.selectbox("情绪状态", ["冷静", "犹豫", "追高", "恐慌", "贪心", "未记录"])
+
+        note = st.text_area("备注", placeholder="记录买入理由、卖出理由、错过点、执行偏差等", height=90)
+
+        submitted = st.form_submit_button("保存交易记录", width="stretch")
+
+        if submitted:
+            try:
+                record = build_trade_record(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    trade_date=trade_date,
+                    trade_type=trade_type,
+                    direction=direction,
+                    buy_price=buy_price,
+                    sell_price=sell_price,
+                    quantity=quantity,
+                    fee=fee,
+                    strategy_source=strategy_source,
+                    followed_plan=followed_plan,
+                    emotion=emotion,
+                    note=note,
+                )
+                append_trade_record(record, TRADE_RECORD_FILE)
+                st.success("交易记录已保存")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                st.error(f"保存失败：{e}")
+
+    st.divider()
+
+    trade_record_df = load_trade_records(TRADE_RECORD_FILE)
+
+    if not trade_record_df.empty:
+        open_position_count = int(trade_record_df["持仓状态"].astype(str).eq("持仓中").sum())
+        sold_df = trade_record_df[trade_record_df["持仓状态"].astype(str).eq("已卖出")].copy()
+        total_profit = pd.to_numeric(sold_df["盈亏金额"], errors="coerce").fillna(0).sum()
+        avg_return = pd.to_numeric(sold_df["收益率"], errors="coerce").dropna()
+
+        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+
+        with metric_col1:
+            st.metric("交易记录", len(trade_record_df))
+
+        with metric_col2:
+            st.metric("持仓中", open_position_count)
+
+        with metric_col3:
+            st.metric("已实现盈亏", f"{total_profit:.2f}")
+
+        with metric_col4:
+            st.metric("平均收益率", f"{avg_return.mean():.2f}%" if not avg_return.empty else "-")
+
+        recent_trade_df = trade_record_df.sort_values("记录时间", ascending=False).head(30)
+
+        show_table(
+            "最近交易记录",
+            keep_columns(
+                recent_trade_df,
+                [
+                    "记录时间",
+                    "交易日期",
+                    "交易类型",
+                    "股票代码",
+                    "股票名称",
+                    "方向",
+                    "买入价格",
+                    "卖出价格",
+                    "数量",
+                    "盈亏金额",
+                    "收益率",
+                    "持仓状态",
+                    "策略来源",
+                    "是否按计划执行",
+                    "情绪状态",
+                    "备注",
+                ],
+            ),
+        )
+    else:
+        st.info("暂无交易记录，先保存一笔真实交易或复盘补录。")
+
+
+with tab4:
     st.subheader("卖点信号")
 
     if sell_signal_md:
@@ -565,7 +708,7 @@ with tab3:
     show_table("卖点核心信号", sell_core_df)
 
 
-with tab4:
+with tab5:
     st.subheader("午盘验证")
 
     if lunch_md:
@@ -594,7 +737,7 @@ with tab4:
     show_table("午盘核心结果", lunch_core_df)
 
 
-with tab5:
+with tab6:
     st.subheader("次日验证")
 
     if next_md:
@@ -639,7 +782,7 @@ with tab5:
     show_table("验证失败 / 待优化", failed_df)
 
 
-with tab6:
+with tab7:
     st.subheader("因子表现")
 
     factor_core_df = keep_columns(
@@ -660,7 +803,7 @@ with tab6:
     show_table("因子表现统计", factor_core_df)
 
 
-with tab7:
+with tab8:
     st.subheader("人工复盘案例库")
 
     if review_cases_md:
