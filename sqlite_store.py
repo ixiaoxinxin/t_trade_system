@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import gzip
 import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -50,7 +51,7 @@ def file_hash(path: Path) -> str:
 
 
 def output_table_name(path: Path) -> str:
-    stem = path.stem.lower().replace("-", "_")
+    stem = re.sub(r"[^0-9a-zA-Z_]+", "_", path.stem.lower()).strip("_")
     return f"page_{stem}"
 
 
@@ -292,7 +293,10 @@ def load_dataframe(path: Path, db_path: Path = DATABASE_FILE) -> pd.DataFrame:
         if not table_exists(conn, table_name):
             return pd.DataFrame()
 
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+        try:
+            df = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
+        except (pd.errors.DatabaseError, sqlite3.DatabaseError):
+            return pd.DataFrame()
 
     return normalize_dataframe(df)
 

@@ -21,6 +21,7 @@ from sqlite_store import (
 class SqliteStoreTest(unittest.TestCase):
     def test_table_for_output_csv(self):
         self.assertEqual(table_for_file(Path("output/final_watchlist.csv")), "page_final_watchlist")
+        self.assertEqual(table_for_file(Path("output/model_predictions_v2.6.csv")), "page_model_predictions_v2_6")
         self.assertEqual(table_for_file(Path("data/dataset/dataset_samples.csv")), "dataset_samples")
 
     def test_migrate_document_file(self):
