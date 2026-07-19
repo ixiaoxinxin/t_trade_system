@@ -23,6 +23,7 @@ import pandas as pd
 from data_provider import get_stock_daily
 from common import normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
+from fixed_holdings import enrich_watchlist_with_fixed_holdings
 
 
 INPUT_FILE = Path("output/final_watchlist.csv")
@@ -140,10 +141,53 @@ def calculate_review(row: pd.Series) -> dict | None:
 
     symbol = normalize_code(row.get("股票代码", ""))
     name = str(row.get("股票名称", ""))
+    fixed_flag = str(row.get("固定持仓", "否"))
+    fixed_reason = str(row.get("置顶原因", ""))
+    refresh_status = str(row.get("行情刷新状态", ""))
 
     buy_ref_price = safe_float(row.get("收盘价", row.get("最新收盘价", 0)))
 
     if buy_ref_price <= 0:
+        if fixed_flag == "是":
+            return {
+                "验证日期": datetime.now().strftime("%Y-%m-%d"),
+                "股票代码": symbol,
+                "股票名称": name,
+                "固定持仓": fixed_flag,
+                "置顶原因": fixed_reason,
+                "行情刷新状态": refresh_status or "参考价为空",
+                "数据状态": "行情待刷新",
+                "分时结构标签": row.get("分时结构标签", ""),
+                "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
+                "隔夜建议等级": row.get("隔夜建议等级", "持仓"),
+                "候选评分": safe_float(row.get("候选评分", 0)),
+                "尾盘评分": safe_float(row.get("尾盘评分", 0)),
+                "最终评分": safe_float(row.get("最终评分", 0)),
+                "买入参考价": 0,
+                "计划低吸下限": 0,
+                "计划低吸上限": 0,
+                "计划验证买入价": 0,
+                "计划止损价": 0,
+                "次日日期": "",
+                "次日开盘": 0,
+                "次日最高": 0,
+                "次日最低": 0,
+                "次日收盘": 0,
+                "次日开盘涨幅": 0,
+                "次日最高涨幅": 0,
+                "次日最低涨幅": 0,
+                "次日收盘涨幅": 0,
+                "是否达到1%": "否",
+                "是否达到2%": "否",
+                "是否触发-2%止损": "否",
+                "是否触达低吸区间": "否",
+                "触达后是否达到1%": "否",
+                "触达后是否达到2%": "否",
+                "触达后是否触发-2%止损": "否",
+                "执行验证结果": "行情待刷新",
+                "时序判断": "固定持仓已置顶，但参考价为空；不写入有效训练标签。",
+                "是否验证成功": "否",
+            }
         print(f"{symbol} {name} 缺少有效收盘价，跳过")
         return None
 
@@ -154,6 +198,46 @@ def calculate_review(row: pd.Series) -> dict | None:
     next_day = get_next_day_daily(symbol, confirm_date=confirm_date)
 
     if next_day is None:
+        if fixed_flag == "是":
+            return {
+                "验证日期": datetime.now().strftime("%Y-%m-%d"),
+                "股票代码": symbol,
+                "股票名称": name,
+                "固定持仓": fixed_flag,
+                "置顶原因": fixed_reason,
+                "行情刷新状态": refresh_status or "次日行情为空",
+                "数据状态": "行情待刷新",
+                "分时结构标签": row.get("分时结构标签", ""),
+                "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
+                "隔夜建议等级": row.get("隔夜建议等级", "持仓"),
+                "候选评分": safe_float(row.get("候选评分", 0)),
+                "尾盘评分": safe_float(row.get("尾盘评分", 0)),
+                "最终评分": safe_float(row.get("最终评分", 0)),
+                "买入参考价": round(buy_ref_price, 2),
+                "计划低吸下限": 0,
+                "计划低吸上限": 0,
+                "计划验证买入价": 0,
+                "计划止损价": 0,
+                "次日日期": "",
+                "次日开盘": 0,
+                "次日最高": 0,
+                "次日最低": 0,
+                "次日收盘": 0,
+                "次日开盘涨幅": 0,
+                "次日最高涨幅": 0,
+                "次日最低涨幅": 0,
+                "次日收盘涨幅": 0,
+                "是否达到1%": "否",
+                "是否达到2%": "否",
+                "是否触发-2%止损": "否",
+                "是否触达低吸区间": "否",
+                "触达后是否达到1%": "否",
+                "触达后是否达到2%": "否",
+                "触达后是否触发-2%止损": "否",
+                "执行验证结果": "行情待刷新",
+                "时序判断": "固定持仓已置顶，但次日行情为空；不写入有效训练标签。",
+                "是否验证成功": "否",
+            }
         return None
 
     next_open = safe_float(next_day.get("open"))
@@ -196,6 +280,10 @@ def calculate_review(row: pd.Series) -> dict | None:
         "验证日期": datetime.now().strftime("%Y-%m-%d"),
         "股票代码": symbol,
         "股票名称": name,
+        "固定持仓": fixed_flag,
+        "置顶原因": fixed_reason,
+        "行情刷新状态": refresh_status or "日线已刷新",
+        "数据状态": "ready",
         "分时结构标签": row.get("分时结构标签", ""),
         "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
         "隔夜建议等级": row.get("隔夜建议等级", ""),
@@ -388,6 +476,7 @@ def run_next_day_validation() -> None:
     )
 
     watchlist["股票代码"] = watchlist["股票代码"].apply(normalize_code)
+    watchlist = enrich_watchlist_with_fixed_holdings(watchlist)
 
     results = []
     failed = []
@@ -414,6 +503,9 @@ def run_next_day_validation() -> None:
     if review_df.empty:
         print("没有成功生成验证结果。")
         return
+
+    if "固定持仓" in review_df.columns:
+        review_df = review_df.sort_values("固定持仓", ascending=False).reset_index(drop=True)
 
     grade_summary = summarize_by_column(review_df, "隔夜建议等级")
     structure_summary = summarize_by_column(review_df, "分时结构标签")

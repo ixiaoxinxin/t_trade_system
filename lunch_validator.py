@@ -24,6 +24,7 @@ import pandas as pd
 from data_provider import get_stock_minute
 from common import normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
+from fixed_holdings import enrich_watchlist_with_fixed_holdings
 
 
 INPUT_FILE = Path("output/final_watchlist.csv")
@@ -212,16 +213,85 @@ def get_afternoon_advice(
 def calculate_lunch_review(row: pd.Series) -> dict | None:
     symbol = normalize_code(row.get("股票代码", ""))
     name = str(row.get("股票名称", ""))
+    fixed_flag = str(row.get("固定持仓", "否"))
+    fixed_reason = str(row.get("置顶原因", ""))
+    refresh_status = str(row.get("行情刷新状态", ""))
 
     reference_price = safe_float(row.get("收盘价", row.get("最新收盘价", 0)))
 
     if reference_price <= 0:
+        if fixed_flag == "是":
+            return {
+                "验证时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "股票代码": symbol,
+                "股票名称": name,
+                "固定持仓": fixed_flag,
+                "置顶原因": fixed_reason,
+                "行情刷新状态": refresh_status or "参考价为空",
+                "隔夜建议等级": row.get("隔夜建议等级", "持仓"),
+                "分时结构标签": row.get("分时结构标签", ""),
+                "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
+                "最终评分": safe_float(row.get("最终评分", 0)),
+                "隔夜参考价": 0,
+                "今日开盘": 0,
+                "上午最高": 0,
+                "上午最低": 0,
+                "午盘价": 0,
+                "上午成交额": 0,
+                "开盘涨幅": 0,
+                "上午最高涨幅": 0,
+                "上午最低涨幅": 0,
+                "午盘涨幅": 0,
+                "午盘位置": 0,
+                "是否达到1%": "否",
+                "是否达到2%": "否",
+                "是否触发-2%止损": "否",
+                "上午结构标签": "待刷新",
+                "下午操作建议": "固定持仓已置顶，但参考价为空；请刷新日线/分钟行情。",
+                "上午最大回撤": 0,
+                "冲高保持率": 0,
+                "回撤风险等级": "待刷新",
+                "冲高质量标签": "待刷新",
+            }
         print(f"{symbol} {name} 缺少参考价，跳过")
         return None
 
     morning_df = get_today_morning_data(symbol)
 
     if morning_df.empty:
+        if fixed_flag == "是":
+            return {
+                "验证时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "股票代码": symbol,
+                "股票名称": name,
+                "固定持仓": fixed_flag,
+                "置顶原因": fixed_reason,
+                "行情刷新状态": refresh_status or "上午分钟数据为空",
+                "隔夜建议等级": row.get("隔夜建议等级", "持仓"),
+                "分时结构标签": row.get("分时结构标签", ""),
+                "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
+                "最终评分": safe_float(row.get("最终评分", 0)),
+                "隔夜参考价": round(reference_price, 2),
+                "今日开盘": 0,
+                "上午最高": 0,
+                "上午最低": 0,
+                "午盘价": 0,
+                "上午成交额": 0,
+                "开盘涨幅": 0,
+                "上午最高涨幅": 0,
+                "上午最低涨幅": 0,
+                "午盘涨幅": 0,
+                "午盘位置": 0,
+                "是否达到1%": "否",
+                "是否达到2%": "否",
+                "是否触发-2%止损": "否",
+                "上午结构标签": "待刷新",
+                "下午操作建议": "固定持仓已置顶，但上午分钟数据为空；请稍后刷新或检查行情源。",
+                "上午最大回撤": 0,
+                "冲高保持率": 0,
+                "回撤风险等级": "待刷新",
+                "冲高质量标签": "待刷新",
+            }
         print(f"{symbol} {name} 上午分钟数据为空，跳过")
         return None
 
@@ -274,6 +344,9 @@ def calculate_lunch_review(row: pd.Series) -> dict | None:
         "验证时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "股票代码": symbol,
         "股票名称": name,
+        "固定持仓": fixed_flag,
+        "置顶原因": fixed_reason,
+        "行情刷新状态": refresh_status or "上午分钟已刷新",
         "隔夜建议等级": row.get("隔夜建议等级", ""),
         "分时结构标签": row.get("分时结构标签", ""),
         "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
@@ -375,9 +448,7 @@ def run_lunch_validation() -> None:
     )
 
     watchlist["股票代码"] = watchlist["股票代码"].apply(normalize_code)
-
-    if "隔夜建议等级" in watchlist.columns:
-        watchlist = watchlist[watchlist["隔夜建议等级"].isin(CONFIG["include_grades"])].copy()
+    watchlist = enrich_watchlist_with_fixed_holdings(watchlist, include_grades=CONFIG["include_grades"])
 
     results = []
     failed = []
@@ -406,8 +477,8 @@ def run_lunch_validation() -> None:
         return
 
     review_df = review_df.sort_values(
-        by=["隔夜建议等级", "最终评分"],
-        ascending=[True, False],
+        by=["固定持仓", "隔夜建议等级", "最终评分"],
+        ascending=[False, True, False],
     ).reset_index(drop=True)
 
     OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)

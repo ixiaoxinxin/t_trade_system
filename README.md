@@ -60,6 +60,10 @@ python main.py next-day
 python main.py review
 python main.py factor-rank
 python main.py dataset
+python main.py holdings-refresh
+python main.py model-train
+python main.py model-predict
+python main.py model-predict --stock-code 002466
 python main.py migrate-db
 python main.py labels
 python main.py split
@@ -80,7 +84,7 @@ output/run_manifest.json
 streamlit run app.py
 ```
 
-前端按真实工作流分为「今日操作台」「明日计划」「复盘验证」「数据与模型」。日常入口是生成明日计划、更新卖点信号、午盘验证、次日复盘和保存训练数据。
+前端按真实工作流分为「今日操作台」「明日计划」「复盘验证」「数据与模型」。日常入口是生成明日计划、更新卖点信号、午盘验证、次日复盘和保存训练数据。v2.6 起，「今日操作台」新增固定持仓跟踪，「数据与模型」新增方向模型训练和预测入口。
 
 ## 主要输出
 
@@ -102,9 +106,18 @@ streamlit run app.py
 - `data/dataset/trade_dataset.sqlite3`
 - `data/dataset/splits/latest.json`
 - `output/dataset_quality_report.md`
+- `data/models/direction_model_v2.6.joblib`
+- `output/model_evaluation_v2.6.md`
+- `output/model_predictions_v2.6.csv`
 - `output/label_review_queue.md`
 
 v2.5 起，SQLite 是页面和训练数据的主存储。旧 CSV/Markdown/JSON 文件只作为兼容导入或过渡导出，页面读取优先走 `data/dataset/trade_dataset.sqlite3`。
+
+## v2.6 方向模型
+
+v2.6 使用 LightGBM 训练次日涨跌方向分类模型，主标签为 `direction_up_close`，即次日收盘是否上涨。模型输出次日上涨概率和方向置信度，只用于辅助排序，不自动替代规则等级。
+
+固定持仓样本池包含融捷股份、云天化、大为股份、神火股份、天齐锂业；这些股票会在卖点信号、午盘验证和次日复盘中置顶。行情缺失时显示待刷新，不写入有效训练标签。
 
 ## 常见问题
 

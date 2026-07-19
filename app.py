@@ -22,6 +22,7 @@ import time
 import pandas as pd
 import streamlit as st
 
+from fixed_holdings import fixed_holding_codes, mark_fixed_holdings, sort_fixed_holdings_first
 from sqlite_store import load_dataframe, load_document, migrate_local_files_to_sqlite
 from trade_journal import append_trade_record, build_trade_record, load_trade_records
 
@@ -56,6 +57,8 @@ DATASET_SAMPLES_FILE = Path("data/dataset/dataset_samples.csv")
 FEATURE_SNAPSHOT_FILE = Path("data/dataset/feature_snapshot.csv")
 LABEL_SNAPSHOT_FILE = Path("data/dataset/label_snapshot.csv")
 PREDICTION_LOG_FILE = Path("data/dataset/prediction_log.csv")
+MODEL_PREDICTION_FILE = Path("output/model_predictions_v2.6.csv")
+MODEL_EVALUATION_MD_FILE = Path("output/model_evaluation_v2.6.md")
 
 
 st.set_page_config(
@@ -69,9 +72,13 @@ st.set_page_config(
 # =========================
 
 def run_script(script_name: str) -> tuple[bool, str, str]:
+    return run_command([script_name])
+
+
+def run_command(command_args: list[str]) -> tuple[bool, str, str]:
     try:
         result = subprocess.run(
-            [sys.executable, script_name],
+            [sys.executable, *command_args],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -116,6 +123,27 @@ def run_single_script_and_refresh(script_name: str) -> None:
         else:
             status.update(
                 label=f"{script_name} 执行失败",
+                state="error",
+            )
+
+
+def run_main_command_and_refresh(command_name: str) -> None:
+    with st.status(f"正在执行 {command_name} ...", expanded=True) as status:
+        success, stdout, stderr = run_command(["main.py", command_name])
+
+        show_script_result(command_name, success, stdout, stderr)
+
+        if success:
+            migrate_local_files_to_sqlite()
+            status.update(
+                label=f"{command_name} 执行完成，正在刷新页面...",
+                state="complete",
+            )
+            time.sleep(1)
+            st.rerun()
+        else:
+            status.update(
+                label=f"{command_name} 执行失败",
                 state="error",
             )
 
@@ -230,11 +258,41 @@ def add_bought_flag(df: pd.DataFrame, bought_codes: set[str]) -> pd.DataFrame:
     return df[cols].reset_index(drop=True)
 
 
+def add_model_probability(df: pd.DataFrame, prediction_df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or prediction_df.empty or "股票代码" not in df.columns:
+        return df
+
+    if "stock_code" not in prediction_df.columns:
+        return df
+
+    pred = prediction_df.copy()
+    pred["股票代码"] = pred["stock_code"].astype(str).str.zfill(6)
+    pred = pred.sort_values("predict_date").drop_duplicates("股票代码", keep="last")
+    pred = pred.rename(columns={
+        "next_day_up_probability": "次日上涨概率",
+        "direction_confidence": "方向置信度",
+        "predicted_direction": "模型方向",
+        "model_version": "模型版本",
+    })
+
+    merged = df.merge(
+        pred[["股票代码", "次日上涨概率", "方向置信度", "模型方向", "模型版本"]],
+        on="股票代码",
+        how="left",
+    )
+
+    for col in ["次日上涨概率", "方向置信度"]:
+        if col in merged.columns:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
+
+    return merged
+
+
 def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    df = df.copy()
+    df = sort_fixed_holdings_first(mark_fixed_holdings(df.copy()))
 
     if "最终评分" in df.columns:
         df["最终评分"] = pd.to_numeric(df["最终评分"], errors="coerce")
@@ -243,7 +301,7 @@ def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
         df["尾盘评分"] = pd.to_numeric(df["尾盘评分"], errors="coerce")
 
     if "隔夜建议等级" in df.columns:
-        grade_order = {"A": 1, "B": 2, "C": 3, "D": 4}
+        grade_order = {"A": 1, "B": 2, "C": 3, "持仓": 4, "D": 5}
         df["_rank"] = df["隔夜建议等级"].map(grade_order).fillna(9)
 
         sort_cols = ["_rank"]
@@ -352,6 +410,68 @@ def show_top_metrics(
     st.caption(f"资金流入方向：{market['资金流入方向']}")
 
 
+def render_fixed_holding_snapshot(
+    final_df: pd.DataFrame,
+    sell_df: pd.DataFrame,
+    lunch_df: pd.DataFrame,
+    next_df: pd.DataFrame,
+    prediction_df: pd.DataFrame,
+) -> None:
+    st.subheader("固定持仓跟踪")
+    st.caption("融捷股份、云天化、大为股份、神火股份、天齐锂业每日置顶，用于卖点、午盘、次日复盘和模型样本沉淀。")
+
+    fixed_codes = fixed_holding_codes()
+    frames = []
+
+    for source_name, frame in [
+        ("交易池", final_df),
+        ("卖点", sell_df),
+        ("午盘", lunch_df),
+        ("次日", next_df),
+    ]:
+        if frame.empty or "股票代码" not in frame.columns:
+            continue
+
+        temp = mark_fixed_holdings(frame)
+        temp = temp[temp["股票代码"].astype(str).str.zfill(6).isin(fixed_codes)].copy()
+        if temp.empty:
+            continue
+
+        temp["来源"] = source_name
+        frames.append(temp)
+
+    if not frames:
+        st.info("固定持仓暂无刷新结果，请点击【更新卖点信号】、【午盘验证】或【次日复盘】。")
+        return
+
+    fixed_df = pd.concat(frames, ignore_index=True)
+    fixed_df = add_model_probability(fixed_df, prediction_df)
+    show_table(
+        "固定持仓最新状态",
+        keep_columns(
+            fixed_df,
+            [
+                "来源",
+                "股票代码",
+                "股票名称",
+                "固定持仓",
+                "行情刷新状态",
+                "次日上涨概率",
+                "方向置信度",
+                "模型方向",
+                "卖出信号",
+                "卖出理由",
+                "午盘涨幅",
+                "上午结构标签",
+                "下午操作建议",
+                "次日收盘涨幅",
+                "执行验证结果",
+                "是否验证成功",
+            ],
+        ),
+    )
+
+
 # =========================
 # 页面主体
 # =========================
@@ -391,13 +511,17 @@ with col5:
         run_single_script_and_refresh("dataset_builder.py")
 
 with st.expander("高级工具", expanded=False):
-    tool_col1, tool_col2 = st.columns(2)
+    tool_col1, tool_col2, tool_col3 = st.columns(3)
 
     with tool_col1:
         if st.button("单独刷新市场环境", width="stretch"):
             run_single_script_and_refresh("market_environment.py")
 
     with tool_col2:
+        if st.button("刷新固定持仓行情", width="stretch"):
+            run_main_command_and_refresh("holdings-refresh")
+
+    with tool_col3:
         if st.button("迁移数据库", width="stretch"):
             run_single_script_and_refresh("sqlite_store.py")
 
@@ -417,6 +541,7 @@ sell_signal_df = load_csv(SELL_SIGNAL_FILE)
 lunch_df = load_csv(LUNCH_REVIEW_FILE)
 next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
+model_prediction_df = load_csv(MODEL_PREDICTION_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -426,6 +551,12 @@ sell_signal_md = load_markdown(SELL_SIGNAL_MD_FILE)
 lunch_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
 dataset_quality_md = load_markdown(DATASET_QUALITY_REPORT_FILE)
+model_evaluation_md = load_markdown(MODEL_EVALUATION_MD_FILE)
+
+final_df = mark_fixed_holdings(final_df)
+sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
+lunch_df = sort_fixed_holdings_first(mark_fixed_holdings(lunch_df))
+next_df = sort_fixed_holdings_first(mark_fixed_holdings(next_df))
 
 bought_codes = load_bought_codes(trade_record_df)
 
@@ -628,10 +759,15 @@ def render_trade_plan_panel() -> None:
         trade_df = sorted_final_df.copy()
 
     trade_df = keep_columns(
-        trade_df,
+        add_model_probability(trade_df, model_prediction_df),
         [
+            "固定持仓",
+            "置顶原因",
             "股票代码",
             "股票名称",
+            "次日上涨概率",
+            "方向置信度",
+            "模型方向",
             "所属板块",
             "板块数据状态",
             "板块当日资金排名",
@@ -661,10 +797,13 @@ def render_sell_signal_panel() -> None:
         st.warning("暂无卖点信号，有持仓时点击【更新卖点信号】。")
 
     sell_core_df = keep_columns(
-        sell_signal_df,
+        add_model_probability(sell_signal_df, model_prediction_df),
         [
+            "固定持仓",
             "股票代码",
             "股票名称",
+            "次日上涨概率",
+            "方向置信度",
             "市场环境",
             "参考价",
             "分时均价",
@@ -687,10 +826,13 @@ def render_lunch_panel() -> None:
         st.warning("暂无午盘验证报告，请在 11:20 后点击【午盘验证】。")
 
     lunch_core_df = keep_columns(
-        lunch_df,
+        add_model_probability(lunch_df, model_prediction_df),
         [
+            "固定持仓",
             "股票代码",
             "股票名称",
+            "次日上涨概率",
+            "方向置信度",
             "隔夜建议等级",
             "最终评分",
             "午盘涨幅",
@@ -712,10 +854,13 @@ def render_next_day_panel() -> None:
         st.warning("暂无次日验证报告，请次日收盘后点击【次日复盘】。")
 
     next_core_df = keep_columns(
-        next_df,
+        add_model_probability(next_df, model_prediction_df),
         [
+            "固定持仓",
             "股票代码",
             "股票名称",
+            "次日上涨概率",
+            "方向置信度",
             "隔夜建议等级",
             "分时结构标签",
             "尾盘抢筹标签",
@@ -766,6 +911,16 @@ def render_factor_panel() -> None:
 def render_dataset_panel() -> None:
     st.subheader("数据集与模型地基")
 
+    model_col1, model_col2 = st.columns(2)
+
+    with model_col1:
+        if st.button("训练方向模型", width="stretch"):
+            run_main_command_and_refresh("model-train")
+
+    with model_col2:
+        if st.button("生成模型预测", width="stretch"):
+            run_main_command_and_refresh("model-predict")
+
     if dataset_quality_md:
         with st.expander("展开数据集质量报告", expanded=True):
             st.markdown(dataset_quality_md)
@@ -776,8 +931,9 @@ def render_dataset_panel() -> None:
     feature_snapshot_df = load_csv(FEATURE_SNAPSHOT_FILE)
     label_snapshot_df = load_csv(LABEL_SNAPSHOT_FILE)
     prediction_log_df = load_csv(PREDICTION_LOG_FILE)
+    model_predictions_df = load_csv(MODEL_PREDICTION_FILE)
 
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
 
     with metric_col1:
         st.metric("样本", len(dataset_samples_df) if not dataset_samples_df.empty else 0)
@@ -790,6 +946,44 @@ def render_dataset_panel() -> None:
 
     with metric_col4:
         st.metric("预测日志", len(prediction_log_df) if not prediction_log_df.empty else 0)
+
+    with metric_col5:
+        st.metric("模型预测", len(model_predictions_df) if not model_predictions_df.empty else 0)
+
+    if model_evaluation_md:
+        with st.expander("展开 v2.6 模型评估报告", expanded=True):
+            st.markdown(model_evaluation_md)
+    else:
+        st.info("暂无 v2.6 模型评估报告，请先点击【训练方向模型】。")
+
+    model_show_df = model_predictions_df.rename(columns={
+        "stock_code": "股票代码",
+        "stock_name": "股票名称",
+        "next_day_up_probability": "次日上涨概率",
+        "direction_confidence": "方向置信度",
+        "predicted_direction": "模型方向",
+        "model_version": "模型版本",
+        "predict_date": "预测日期",
+        "market_regime": "市场环境",
+        "sector_name": "所属板块",
+    })
+    show_table(
+        "v2.6 次日上涨概率排序",
+        keep_columns(
+            model_show_df,
+            [
+                "预测日期",
+                "股票代码",
+                "股票名称",
+                "次日上涨概率",
+                "方向置信度",
+                "模型方向",
+                "市场环境",
+                "所属板块",
+                "模型版本",
+            ],
+        ),
+    )
 
     show_table("样本主表预览", dataset_samples_df.head(30))
 
@@ -804,6 +998,14 @@ tab_today, tab_plan, tab_review, tab_data = st.tabs([
 
 with tab_today:
     render_market_panel()
+    st.divider()
+    render_fixed_holding_snapshot(
+        final_df=final_df,
+        sell_df=sell_signal_df,
+        lunch_df=lunch_df,
+        next_df=next_df,
+        prediction_df=model_prediction_df,
+    )
     st.divider()
     render_trade_record_panel()
     st.divider()

@@ -18,6 +18,7 @@ from dataset_splitter import build_time_series_split
 from label_calculator import calculate_label_snapshot
 from llm_labeler import build_llm_tables as build_llm_label_tables
 from llm_labeler import build_provider_status_table
+from fixed_holdings import enrich_watchlist_with_fixed_holdings
 from sqlite_store import migrate_local_files_to_sqlite
 from trade_journal import TRADE_RECORD_COLUMNS, TRADE_RECORD_FILE, load_trade_records
 
@@ -733,6 +734,10 @@ def build_label_snapshot(next_day_df: pd.DataFrame) -> pd.DataFrame:
     rule_version = f"v{PRODUCT_VERSION}"
 
     for _, row in next_day_df.iterrows():
+        data_status = str(row.get("数据状态", "ready") or "ready")
+        if data_status not in ["", "ready"]:
+            continue
+
         code = normalize_code(row.get("股票代码", ""))
         predict_date = str(row.get("验证日期", ""))[:10] or today_text()
 
@@ -953,7 +958,7 @@ def build_dataset() -> dict:
     db_path = Path(dataset_config.get("database_path", DATABASE_FILE))
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    final_df = read_csv(FINAL_WATCHLIST_FILE)
+    final_df = enrich_watchlist_with_fixed_holdings(read_csv(FINAL_WATCHLIST_FILE))
     next_day_df = read_csv(NEXT_DAY_REVIEW_FILE)
     market_env = read_json(MARKET_ENV_FILE)
     manifest = read_json(RUN_MANIFEST_FILE)

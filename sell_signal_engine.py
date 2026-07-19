@@ -23,6 +23,7 @@ import pandas as pd
 from data_provider import get_stock_minute
 from common import load_yaml_config, normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
+from fixed_holdings import enrich_watchlist_with_fixed_holdings
 
 
 FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
@@ -257,16 +258,77 @@ def get_sell_signal(
 def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
     symbol = normalize_code(row.get("股票代码", ""))
     name = str(row.get("股票名称", ""))
+    fixed_flag = str(row.get("固定持仓", "否"))
+    fixed_reason = str(row.get("置顶原因", ""))
+    refresh_status = str(row.get("行情刷新状态", ""))
 
     reference_price = get_reference_price(row)
 
     if reference_price <= 0:
+        if fixed_flag == "是":
+            return {
+                "生成时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "股票代码": symbol,
+                "股票名称": name,
+                "固定持仓": fixed_flag,
+                "置顶原因": fixed_reason,
+                "行情刷新状态": refresh_status or "参考价为空",
+                "隔夜等级": row.get("隔夜建议等级", "持仓"),
+                "市场环境": str(market_env.get("市场环境", "未知")),
+                "参考价": 0,
+                "当前价": 0,
+                "盘中最高": 0,
+                "盘中最低": 0,
+                "分时均价": 0,
+                "当前涨幅": 0,
+                "最高涨幅": 0,
+                "最低涨幅": 0,
+                "高点回撤": 0,
+                "冲高保持率": 0,
+                "保持率标签": "待刷新",
+                "均线状态": "待刷新",
+                "卖出信号": "待刷新",
+                "卖出理由": "固定持仓已置顶，但参考价为空；请刷新日线/分钟行情后再判断卖点。",
+                "最终评分": safe_float(row.get("最终评分", 0)),
+                "尾盘评分": safe_float(row.get("尾盘评分", 0)),
+                "分时结构标签": str(row.get("分时结构标签", "")),
+                "尾盘抢筹标签": str(row.get("尾盘抢筹标签", "")),
+            }
         print(f"{symbol} {name} 缺少参考价，跳过")
         return None
 
     minute_df = get_today_minute_data(symbol)
 
     if minute_df.empty:
+        if fixed_flag == "是":
+            return {
+                "生成时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "股票代码": symbol,
+                "股票名称": name,
+                "固定持仓": fixed_flag,
+                "置顶原因": fixed_reason,
+                "行情刷新状态": refresh_status or "分钟数据为空",
+                "隔夜等级": row.get("隔夜建议等级", "持仓"),
+                "市场环境": str(market_env.get("市场环境", "未知")),
+                "参考价": round(reference_price, 2),
+                "当前价": 0,
+                "盘中最高": 0,
+                "盘中最低": 0,
+                "分时均价": 0,
+                "当前涨幅": 0,
+                "最高涨幅": 0,
+                "最低涨幅": 0,
+                "高点回撤": 0,
+                "冲高保持率": 0,
+                "保持率标签": "待刷新",
+                "均线状态": "待刷新",
+                "卖出信号": "待刷新",
+                "卖出理由": "固定持仓已置顶，但分钟数据为空；请稍后刷新或检查行情源。",
+                "最终评分": safe_float(row.get("最终评分", 0)),
+                "尾盘评分": safe_float(row.get("尾盘评分", 0)),
+                "分时结构标签": str(row.get("分时结构标签", "")),
+                "尾盘抢筹标签": str(row.get("尾盘抢筹标签", "")),
+            }
         print(f"{symbol} {name} 分钟数据为空，跳过")
         return None
 
@@ -308,6 +370,9 @@ def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
         "生成时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "股票代码": symbol,
         "股票名称": name,
+        "固定持仓": fixed_flag,
+        "置顶原因": fixed_reason,
+        "行情刷新状态": refresh_status or "分钟已刷新",
         "隔夜等级": grade,
         "市场环境": env,
         "参考价": round(reference_price, 2),
@@ -342,9 +407,7 @@ def build_sell_signal() -> pd.DataFrame:
     )
 
     df["股票代码"] = df["股票代码"].apply(normalize_code)
-
-    if "隔夜建议等级" in df.columns:
-        df = df[df["隔夜建议等级"].isin(CONFIG["include_grades"])].copy()
+    df = enrich_watchlist_with_fixed_holdings(df, include_grades=CONFIG["include_grades"])
 
     market_env = load_market_environment()
 
@@ -371,10 +434,12 @@ def build_sell_signal() -> pd.DataFrame:
 
     signal_df["_rank"] = signal_df["卖出信号"].map(signal_order).fillna(9)
 
+    signal_df["_fixed_rank"] = signal_df.get("固定持仓", "否").astype(str).eq("是").map({True: 0, False: 1})
+
     signal_df = signal_df.sort_values(
-        by=["_rank", "当前涨幅", "最高涨幅"],
-        ascending=[True, False, False],
-    ).drop(columns=["_rank"]).reset_index(drop=True)
+        by=["_fixed_rank", "_rank", "当前涨幅", "最高涨幅"],
+        ascending=[True, True, False, False],
+    ).drop(columns=["_fixed_rank", "_rank"]).reset_index(drop=True)
 
     return signal_df
 
@@ -393,6 +458,7 @@ def build_markdown(signal_df: pd.DataFrame) -> str:
     core_cols = [
         "股票代码",
         "股票名称",
+        "固定持仓",
         "隔夜等级",
         "市场环境",
         "参考价",

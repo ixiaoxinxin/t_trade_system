@@ -3,3 +3,5 @@ pandas
 pyyaml
 akshare
 tabulate
+lightgbm
+scikit-learn

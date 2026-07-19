@@ -163,6 +163,10 @@ def calculate_label_snapshot(
     version = rule_version or f"v{PRODUCT_VERSION}"
 
     for _, row in next_day_df.iterrows():
+        data_status = str(row.get("数据状态", "ready") or "ready")
+        if data_status not in ["", "ready"]:
+            continue
+
         code = normalize_code(row.get("股票代码", ""))
         predict_date = str(row.get("验证日期", ""))[:10]
 

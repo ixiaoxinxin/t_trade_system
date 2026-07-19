@@ -89,13 +89,31 @@ COMMANDS = {
         "runner": ("dataset_quality_report", "run_dataset_quality_report"),
         "outputs": ["output/dataset_quality_report.md", "output/label_review_queue.md"],
     },
+    "holdings-refresh": {
+        "description": "刷新固定持仓日线与分钟数据",
+        "runner": ("fixed_holdings", "refresh_fixed_holding_market_data"),
+        "outputs": ["output/fixed_holdings_refresh.csv", "cache/daily", "cache/minute"],
+    },
+    "model-train": {
+        "description": "训练 v2.6 次日涨跌方向分类模型",
+        "runner": ("direction_model", "run_model_train"),
+        "outputs": [
+            "data/models/direction_model_v2.6.joblib",
+            "output/model_evaluation_v2.6.md",
+        ],
+    },
+    "model-predict": {
+        "description": "生成 v2.6 次日上涨概率预测",
+        "runner": ("direction_model", "run_model_predict"),
+        "outputs": ["output/model_predictions_v2.6.csv"],
+    },
 }
 
 
 PIPELINE = ["market", "candidates", "tail", "plan"]
 
 
-def call_runner(command_name: str, max_count: int | None = None) -> dict:
+def call_runner(command_name: str, max_count: int | None = None, stock_code: str | None = None) -> dict:
     spec = COMMANDS[command_name]
     module_name, function_name = spec["runner"]
 
@@ -107,6 +125,8 @@ def call_runner(command_name: str, max_count: int | None = None) -> dict:
 
         if command_name == "candidates":
             runner(max_count=max_count)
+        elif command_name == "model-predict":
+            runner(stock_code=stock_code)
         else:
             runner()
 
@@ -150,6 +170,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="仅 candidates/pipeline 使用，限制扫描股票数量，便于快速验证。",
     )
+    parser.add_argument(
+        "--stock-code",
+        default=None,
+        help="仅 model-predict 使用，指定单只股票代码输出预测概率。",
+    )
 
     return parser
 
@@ -169,7 +194,7 @@ def main() -> int:
 
     for command_name in steps_to_run:
         print(f"\n开始执行：{command_name} - {COMMANDS[command_name]['description']}")
-        result = call_runner(command_name, max_count=args.max_count)
+        result = call_runner(command_name, max_count=args.max_count, stock_code=args.stock_code)
         steps.append(result)
         outputs.extend(result.get("outputs", []))
 
@@ -183,7 +208,7 @@ def main() -> int:
         command=args.command,
         steps=steps,
         outputs=sorted(set(outputs)),
-        config_summary={"max_count": args.max_count},
+        config_summary={"max_count": args.max_count, "stock_code": args.stock_code},
     )
 
     print(f"\n运行记录已生成：{Path('output/run_manifest.json')}")
