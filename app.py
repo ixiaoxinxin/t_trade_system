@@ -12,6 +12,7 @@ A股隔日T选股系统 v2.0 Streamlit 精简版
 5. 原始 Markdown 报告默认折叠
 6. 页面按真实交易工作流重组
 7. 人工复盘入口下线，复盘沉淀以真实交易记录为准
+8. v2.6 页面按工作流拆成独立一级 Tab，固定持仓、交易记录、午盘、模型训练、模型预测分开验收
 """
 
 from pathlib import Path
@@ -945,31 +946,29 @@ def render_factor_panel() -> None:
     show_table("因子表现统计", factor_core_df)
 
 
-def render_dataset_panel() -> None:
-    st.subheader("数据集与模型地基")
-
-    model_col1, model_col2 = st.columns(2)
-
-    with model_col1:
-        if st.button("训练方向模型", width="stretch"):
-            run_main_command_and_refresh("model-train")
-
-    with model_col2:
-        if st.button("生成模型预测", width="stretch"):
-            run_main_command_and_refresh("model-predict")
-
-    if dataset_quality_md:
-        with st.expander("展开数据集质量报告", expanded=True):
-            st.markdown(dataset_quality_md)
-    else:
-        st.warning("暂无数据集质量报告，请点击【保存训练数据】。")
-
+def load_dataset_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     dataset_samples_df = load_csv(DATASET_SAMPLES_FILE)
     feature_snapshot_df = load_csv(FEATURE_SNAPSHOT_FILE)
     label_snapshot_df = load_csv(LABEL_SNAPSHOT_FILE)
     prediction_log_df = load_csv(PREDICTION_LOG_FILE)
     model_predictions_df = load_csv(MODEL_PREDICTION_FILE)
 
+    return (
+        dataset_samples_df,
+        feature_snapshot_df,
+        label_snapshot_df,
+        prediction_log_df,
+        model_predictions_df,
+    )
+
+
+def render_dataset_metrics(
+    dataset_samples_df: pd.DataFrame,
+    feature_snapshot_df: pd.DataFrame,
+    label_snapshot_df: pd.DataFrame,
+    prediction_log_df: pd.DataFrame,
+    model_predictions_df: pd.DataFrame,
+) -> None:
     metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
 
     with metric_col1:
@@ -987,11 +986,67 @@ def render_dataset_panel() -> None:
     with metric_col5:
         st.metric("模型预测", len(model_predictions_df) if not model_predictions_df.empty else 0)
 
+
+def render_model_training_panel() -> None:
+    st.subheader("模型训练")
+    st.caption("先保存训练数据，再训练 v2.6 方向模型。这里主要看样本量、标签覆盖和模型评估。")
+
+    if st.button("训练方向模型", width="stretch"):
+        run_main_command_and_refresh("model-train")
+
+    (
+        dataset_samples_df,
+        feature_snapshot_df,
+        label_snapshot_df,
+        prediction_log_df,
+        model_predictions_df,
+    ) = load_dataset_frames()
+
+    render_dataset_metrics(
+        dataset_samples_df,
+        feature_snapshot_df,
+        label_snapshot_df,
+        prediction_log_df,
+        model_predictions_df,
+    )
+
+    if dataset_quality_md:
+        with st.expander("展开数据集质量报告", expanded=True):
+            st.markdown(dataset_quality_md)
+    else:
+        st.warning("暂无数据集质量报告，请点击【保存训练数据】。")
+
     if model_evaluation_md:
         with st.expander("展开 v2.6 模型评估报告", expanded=True):
             st.markdown(model_evaluation_md)
     else:
         st.info("暂无 v2.6 模型评估报告，请先点击【训练方向模型】。")
+
+    show_table("样本主表预览", dataset_samples_df.head(20))
+
+
+def render_model_prediction_panel() -> None:
+    st.subheader("模型预测")
+    st.caption("生成候选股票的次日上涨概率和方向置信度，只做辅助排序，不替代规则等级。")
+
+    if st.button("生成模型预测", width="stretch"):
+        run_main_command_and_refresh("model-predict")
+
+    (
+        dataset_samples_df,
+        feature_snapshot_df,
+        label_snapshot_df,
+        prediction_log_df,
+        model_predictions_df,
+    ) = load_dataset_frames()
+
+    render_dataset_metrics(
+        dataset_samples_df,
+        feature_snapshot_df,
+        label_snapshot_df,
+        prediction_log_df,
+        model_predictions_df,
+    )
 
     model_show_df = model_predictions_df.rename(columns={
         "stock_code": "股票代码",
@@ -1022,20 +1077,43 @@ def render_dataset_panel() -> None:
         ),
     )
 
-    show_table("样本主表预览", dataset_samples_df.head(30))
 
-
-tab_today, tab_plan, tab_review, tab_data = st.tabs([
-    "今日操作台",
+tab_plan, tab_holdings, tab_trade_records, tab_lunch, tab_model_train, tab_model_predict = st.tabs([
     "明日计划",
-    "复盘验证",
-    "数据与模型",
+    "固定持仓",
+    "交易记录",
+    "午盘验证",
+    "模型训练",
+    "模型预测",
 ])
 
 
-with tab_today:
-    render_market_panel()
+with tab_plan:
+    with st.expander("今日市场与高级信息", expanded=False):
+        render_market_panel()
+        st.divider()
+        render_factor_panel()
+
+    render_trade_plan_panel()
     st.divider()
+    render_next_day_panel()
+
+
+with tab_holdings:
+    holding_col1, holding_col2, holding_col3 = st.columns(3)
+
+    with holding_col1:
+        if st.button("刷新固定持仓行情", key="tab_refresh_holding_market", width="stretch"):
+            run_main_command_and_refresh("holdings-refresh")
+
+    with holding_col2:
+        if st.button("刷新持仓买卖点", key="tab_refresh_holding_signals", width="stretch"):
+            run_main_command_and_refresh("holdings-signals")
+
+    with holding_col3:
+        if st.button("更新全部卖点信号", key="tab_refresh_all_sell_signals", width="stretch"):
+            run_single_script_and_refresh("sell_signal_engine.py")
+
     render_fixed_holding_snapshot(
         final_df=final_df,
         sell_df=sell_signal_df,
@@ -1044,25 +1122,23 @@ with tab_today:
         prediction_df=model_prediction_df,
     )
     st.divider()
-    render_trade_record_panel()
-    st.divider()
     render_sell_signal_panel()
-    st.divider()
+
+
+with tab_trade_records:
+    render_trade_record_panel()
+
+
+with tab_lunch:
+    if st.button("刷新午盘验证", key="tab_refresh_lunch", width="stretch"):
+        run_single_script_and_refresh("lunch_validator.py")
+
     render_lunch_panel()
 
 
-with tab_plan:
-    render_trade_plan_panel()
+with tab_model_train:
+    render_model_training_panel()
 
 
-with tab_review:
-    render_next_day_panel()
-    st.divider()
-    st.subheader("真实交易复盘")
-    render_trade_record_summary()
-    st.divider()
-    render_factor_panel()
-
-
-with tab_data:
-    render_dataset_panel()
+with tab_model_predict:
+    render_model_prediction_panel()
