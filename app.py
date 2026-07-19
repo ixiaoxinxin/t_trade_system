@@ -23,6 +23,7 @@ import json
 import pandas as pd
 import streamlit as st
 
+from sqlite_store import load_dataframe, load_document, load_jsonl_document, migrate_local_files_to_sqlite
 from trade_journal import append_trade_record, build_trade_record, load_trade_records
 
 
@@ -109,6 +110,7 @@ def run_single_script_and_refresh(script_name: str) -> None:
         show_script_result(script_name, success, stdout, stderr)
 
         if success:
+            migrate_local_files_to_sqlite()
             status.update(
                 label=f"{script_name} 执行完成，正在刷新页面...",
                 state="complete",
@@ -148,6 +150,7 @@ def run_main_pipeline_and_refresh() -> None:
                 break
 
         if all_success:
+            migrate_local_files_to_sqlite()
             status.update(
                 label="一键主流程全部执行完成，正在刷新页面...",
                 state="complete",
@@ -157,6 +160,11 @@ def run_main_pipeline_and_refresh() -> None:
 
 
 def load_csv(file_path: Path) -> pd.DataFrame:
+    db_df = load_dataframe(file_path)
+
+    if not db_df.empty:
+        return db_df
+
     if not file_path.exists():
         return pd.DataFrame()
 
@@ -174,6 +182,11 @@ def load_csv(file_path: Path) -> pd.DataFrame:
 
 
 def load_jsonl(file_path: Path) -> pd.DataFrame:
+    db_df = load_jsonl_document(file_path)
+
+    if not db_df.empty:
+        return db_df
+
     if not file_path.exists():
         return pd.DataFrame()
 
@@ -197,6 +210,11 @@ def load_jsonl(file_path: Path) -> pd.DataFrame:
 
 
 def load_markdown(file_path: Path) -> str:
+    db_content = load_document(file_path)
+
+    if db_content:
+        return db_content
+
     if not file_path.exists():
         return ""
 
@@ -387,7 +405,7 @@ st.divider()
 
 st.subheader("操作区")
 
-col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
 
 with col1:
     if st.button("市场环境", width="stretch"):
@@ -416,6 +434,12 @@ with col6:
 with col7:
     if st.button("生成数据集", width="stretch"):
         run_single_script_and_refresh("dataset_builder.py")
+
+with col8:
+    if st.button("迁移数据库", width="stretch"):
+        run_single_script_and_refresh("sqlite_store.py")
+
+st.caption("页面数据源：SQLite 优先；脚本产生的本地文件会在执行后自动迁移入库。")
 
 st.divider()
 

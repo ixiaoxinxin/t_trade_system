@@ -1,6 +1,6 @@
 {
   "product_version": "2.0",
-  "generated_at": "2026-07-19 15:59:24",
+  "generated_at": "2026-07-19 16:17:57",
   "command": "dataset",
   "config_summary": {
     "max_count": null
@@ -10,32 +10,18 @@
       "name": "dataset",
       "description": "生成 v2.5 训练数据集与标签系统",
       "success": true,
-      "started_at": "2026-07-19 15:59:24",
-      "finished_at": "2026-07-19 15:59:24",
+      "started_at": "2026-07-19 16:17:50",
+      "finished_at": "2026-07-19 16:17:57",
       "outputs": [
         "data/dataset/trade_dataset.sqlite3",
-        "data/dataset/dataset_samples.csv",
-        "data/dataset/feature_snapshot.csv",
-        "data/dataset/label_snapshot.csv",
-        "data/dataset/prediction_log.csv",
-        "data/dataset/trade_records.csv",
-        "data/dataset/llm_label_snapshot.csv",
-        "data/dataset/api_usage_log.csv",
         "data/dataset/splits/latest.json",
         "output/dataset_quality_report.md"
       ]
     }
   ],
   "outputs": [
-    "data/dataset/api_usage_log.csv",
-    "data/dataset/dataset_samples.csv",
-    "data/dataset/feature_snapshot.csv",
-    "data/dataset/label_snapshot.csv",
-    "data/dataset/llm_label_snapshot.csv",
-    "data/dataset/prediction_log.csv",
     "data/dataset/splits/latest.json",
     "data/dataset/trade_dataset.sqlite3",
-    "data/dataset/trade_records.csv",
     "output/dataset_quality_report.md"
   ],
   "success": true

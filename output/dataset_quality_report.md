@@ -1,6 +1,6 @@
 # v2.5 数据集质量报告
 
-生成时间：2026-07-19 15:59:24
+生成时间：2026-07-19 16:17:50
 
 ## 一、数据库
 
@@ -30,13 +30,6 @@
 
 ## 五、导出文件
 
-- `data/dataset/dataset_samples.csv`
-- `data/dataset/feature_snapshot.csv`
-- `data/dataset/label_snapshot.csv`
-- `data/dataset/prediction_log.csv`
-- `data/dataset/trade_records.csv`
-- `data/dataset/llm_label_snapshot.csv`
-- `data/dataset/api_usage_log.csv`
 - `data/dataset/splits/latest.json`
 - `data/dataset/trade_dataset.sqlite3`
 - `output/dataset_quality_report.md`

@@ -66,13 +66,36 @@ dataset:
 本次 2.1 commit 将 v2.5 的数据地基先落到可运行状态：
 
 - 已建立 SQLite 样本库：`data/dataset/trade_dataset.sqlite3`。
-- 已建立并导出 7 张表：`dataset_samples`、`feature_snapshot`、`label_snapshot`、`prediction_log`、`trade_records`、`llm_label_snapshot`、`api_usage_log`。
+- 已在 SQLite 中建立 7 张表：`dataset_samples`、`feature_snapshot`、`label_snapshot`、`prediction_log`、`trade_records`、`llm_label_snapshot`、`api_usage_log`。
 - 已新增 `dataset_builder.py`，负责从交易池、次日验证、市场环境、运行记录和真实交易记录生成数据集。
 - 已新增 `llm_labeler.py`，支持 DeepSeek、豆包、通义千问、智谱等 OpenAI-compatible API 配置；默认关闭，缺少 API Key 时自动跳过，不阻断数据集生成。
+- 已新增 `sqlite_store.py`，负责把本地页面输出、Markdown/JSON 报告、日线缓存、分钟缓存迁移到 SQLite。
 - 已新增 `python main.py dataset` 统一入口。
-- 已新增 Streamlit 页面「生成数据集」按钮和「数据集」Tab。
+- 已新增 `python main.py migrate-db` 迁移入口。
+- 已新增 Streamlit 页面「生成数据集」「迁移数据库」按钮和「数据集」Tab。
+- 页面读取优先走 SQLite；CSV/Markdown/JSON 只作为兼容导入和过渡层。
 - 已新增时间序列切分文件：`data/dataset/splits/latest.json`，当前先按预测日期 70% / 15% / 15% 切分；样本量扩大后升级为 2年 / 3个月 / 1个月滚动窗口。
 - 已新增质量报告：`output/dataset_quality_report.md`。
+
+### 2.5 SQLite 本地数据迁移范围
+
+本版本开始把 SQLite 作为本地页面数据和训练数据的主存储。
+
+| 数据类型 | SQLite 表 | 说明 |
+|---|---|---|
+| 页面 CSV 输出 | `page_*` | 例如 `page_final_watchlist`、`page_market_environment`、`page_sell_signal` |
+| Markdown/JSON/JSONL 报告 | `app_documents` | 保留原始文本内容和 hash |
+| 日线行情缓存 | `cache_files` | 每个缓存文件一条压缩记录，保留 `stock_code`、`source_path`、`row_count`、`content_blob`、hash |
+| 分钟行情缓存 | `cache_files` | 每个缓存文件一条压缩记录，保留 `stock_code`、`source_path`、`row_count`、`content_blob`、hash |
+| 迁移记录 | `data_migration_log` | 记录每个文件迁移到哪张表、行数、hash、迁移时间 |
+| 真实交易记录 | `trade_records` | 页面新增交易默认直接写 SQLite |
+
+过渡原则：
+
+- 页面读取以 SQLite 为准；SQLite 暂无数据时才回退读取本地文件。
+- 页面按钮执行脚本成功后，会自动调用迁移，把新输出导入 SQLite。
+- 当前策略脚本仍可能产生 CSV/Markdown/JSON 文件，但这些文件不再作为页面主数据源。
+- 后续版本逐步把各策略脚本的写入端改为直接写 SQLite，最终移除兼容文件输出。
 
 ## 3. 数据资产设计
 
@@ -134,7 +157,7 @@ dataset:
 
 ### 3.4 真实交易记录表 `trade_records`
 
-真实交易记录是个性化模型的重要输入，用来区分“系统理论上可交易”和“用户真实执行后的结果”。该表由页面手动录入，保存到 `output/trade_records.csv`，后续 v2.5 数据集生成时并入样本库。
+真实交易记录是个性化模型的重要输入，用来区分“系统理论上可交易”和“用户真实执行后的结果”。该表由页面手动录入，默认保存到 SQLite 的 `trade_records` 表，后续 v2.5 数据集生成时直接并入样本库。
 
 记录范围只包含日内T和隔日T，不记录建仓、减仓、清仓、观察记录，也不记录情绪状态。每条记录可以是单独买入、单独卖出或买入并卖出；其中卖出和买入并卖出必须填写买入成本价和卖出价，系统自动计算招行证券手续费与到手利润。
 
@@ -170,7 +193,7 @@ dataset:
 - 方向只允许 `买入`、`卖出`、`买入并卖出`。
 - 不展示、不保存情绪状态。
 - 按招行证券万2.5、单笔最低5元自动计算买入手续费、卖出手续费、手续费合计、到手利润和收益率。
-- 保存后立即写入 `output/trade_records.csv` 并刷新表格。
+- 保存后立即写入 SQLite 的 `trade_records` 表并刷新表格。
 - 页面展示最近 30 条记录、未闭环数量、已实现到手利润和平均收益率。
 
 建模用途：
@@ -361,15 +384,16 @@ llm_labeling:
 
 - 新增 `dataset_builder.py`。
 - 读取 `output/final_watchlist.csv`、`output/daily_plan.md`、`output/market_environment.json`、`output/run_manifest.json`、`output/trade_records.csv`。
-- 生成 `data/dataset/dataset_samples.csv`。
-- 生成 `data/dataset/feature_snapshot.csv`。
 - 生成 `data/dataset/trade_dataset.sqlite3`。
+- 数据集表直接写入 SQLite，不再依赖 `data/dataset/*.csv` 作为主输出。
+- 新增 `sqlite_store.py`，迁移页面输出和行情缓存到 SQLite。
 
 验收：
 
 - 可以为现有输出生成样本主表。
 - 样本包含 `sample_id`、预测日期、目标日期、规则版本、配置摘要。
 - `python main.py dataset` 可单独运行。
+- `python main.py migrate-db` 可把页面输出、报告文档和行情缓存迁移入 SQLite。
 
 ### M1.5 真实交易记录入口
 
@@ -380,7 +404,7 @@ llm_labeling:
 - 支持手动记录日内T和隔日T。
 - 支持单独买入、单独卖出、买入并卖出。
 - 按招行证券万2.5、单笔最低5元自动计算手续费、到手利润和收益率。
-- 将记录保存为 `output/trade_records.csv`。
+- 将记录默认保存到 SQLite 的 `trade_records` 表。
 
 验收：
 
@@ -453,8 +477,8 @@ llm_labeling:
 ## 8. 验收标准
 
 - `python main.py dataset` 可生成样本、特征、标签和质量报告。
-- `data/dataset/dataset_samples.csv`、`feature_snapshot.csv`、`label_snapshot.csv` 存在。
-- `output/trade_records.csv` 可记录真实交易，并作为个性化样本输入。
+- SQLite 中存在 `dataset_samples`、`feature_snapshot`、`label_snapshot`。
+- SQLite 的 `trade_records` 表可记录真实交易，并作为个性化样本输入。
 - 标签计算可在无大模型 API Key 时完成。
 - 大模型辅助标签可配置开启，并支持成本上限。
 - `label_review_queue.csv` 能收集冲突和低置信样本。

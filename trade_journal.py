@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pandas as pd
@@ -12,6 +13,7 @@ from common import normalize_code, safe_float
 
 
 TRADE_RECORD_FILE = Path("output/trade_records.csv")
+TRADE_DATABASE_FILE = Path("data/dataset/trade_dataset.sqlite3")
 
 TRADE_RECORD_COLUMNS = [
     "记录ID",
@@ -40,12 +42,118 @@ ALLOWED_DIRECTIONS = {"买入", "卖出", "买入并卖出"}
 COMMISSION_RATE = 0.00025
 MIN_COMMISSION = 5.0
 
+DB_TO_CN_COLUMNS = {
+    "record_id": "记录ID",
+    "recorded_at": "记录时间",
+    "trade_date": "交易日期",
+    "trade_type": "交易类型",
+    "stock_code": "股票代码",
+    "stock_name": "股票名称",
+    "direction": "方向",
+    "buy_price": "买入价格",
+    "sell_price": "卖出价格",
+    "quantity": "数量",
+    "buy_commission": "买入手续费",
+    "sell_commission": "卖出手续费",
+    "total_commission": "手续费合计",
+    "net_profit": "到手利润",
+    "return_rate": "收益率",
+    "closed_status": "闭环状态",
+    "strategy_source": "策略来源",
+    "followed_plan": "是否按计划执行",
+    "note": "备注",
+}
+
+CN_TO_DB_COLUMNS = {value: key for key, value in DB_TO_CN_COLUMNS.items()}
+
 
 def calculate_commission(amount: float) -> float:
     if amount <= 0:
         return 0.0
 
     return round(max(amount * COMMISSION_RATE, MIN_COMMISSION), 2)
+
+
+def ensure_trade_record_table() -> None:
+    TRADE_DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(TRADE_DATABASE_FILE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_records (
+                record_id TEXT PRIMARY KEY,
+                recorded_at TEXT,
+                trade_date TEXT,
+                trade_type TEXT,
+                stock_code TEXT,
+                stock_name TEXT,
+                direction TEXT,
+                buy_price REAL,
+                sell_price REAL,
+                quantity INTEGER,
+                buy_commission REAL,
+                sell_commission REAL,
+                total_commission REAL,
+                net_profit REAL,
+                return_rate REAL,
+                closed_status TEXT,
+                strategy_source TEXT,
+                followed_plan TEXT,
+                note TEXT
+            )
+        """)
+        conn.commit()
+
+
+def default_sqlite_enabled(path: Path) -> bool:
+    return Path(path) == TRADE_RECORD_FILE
+
+
+def load_trade_records_from_sqlite() -> pd.DataFrame:
+    if not TRADE_DATABASE_FILE.exists():
+        return pd.DataFrame(columns=TRADE_RECORD_COLUMNS)
+
+    ensure_trade_record_table()
+
+    with sqlite3.connect(TRADE_DATABASE_FILE) as conn:
+        df = pd.read_sql_query("SELECT * FROM trade_records ORDER BY recorded_at DESC", conn)
+
+    if df.empty:
+        return pd.DataFrame(columns=TRADE_RECORD_COLUMNS)
+
+    df = df.rename(columns=DB_TO_CN_COLUMNS)
+
+    for col in TRADE_RECORD_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    df["股票代码"] = df["股票代码"].apply(normalize_code)
+
+    return df[TRADE_RECORD_COLUMNS].copy()
+
+
+def append_trade_record_to_sqlite(record: dict) -> pd.DataFrame:
+    ensure_trade_record_table()
+    db_record = {db_col: record.get(cn_col, "") for cn_col, db_col in CN_TO_DB_COLUMNS.items()}
+
+    with sqlite3.connect(TRADE_DATABASE_FILE) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO trade_records
+            (record_id, recorded_at, trade_date, trade_type, stock_code, stock_name,
+             direction, buy_price, sell_price, quantity, buy_commission, sell_commission,
+             total_commission, net_profit, return_rate, closed_status, strategy_source,
+             followed_plan, note)
+            VALUES
+            (:record_id, :recorded_at, :trade_date, :trade_type, :stock_code, :stock_name,
+             :direction, :buy_price, :sell_price, :quantity, :buy_commission, :sell_commission,
+             :total_commission, :net_profit, :return_rate, :closed_status, :strategy_source,
+             :followed_plan, :note)
+            """,
+            db_record,
+        )
+        conn.commit()
+
+    return load_trade_records_from_sqlite()
 
 
 def calculate_net_profit(
@@ -158,6 +266,12 @@ def build_trade_record(
 
 
 def load_trade_records(path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
+    if default_sqlite_enabled(path):
+        sqlite_df = load_trade_records_from_sqlite()
+
+        if not sqlite_df.empty:
+            return sqlite_df
+
     if not path.exists():
         return pd.DataFrame(columns=TRADE_RECORD_COLUMNS)
 
@@ -173,6 +287,9 @@ def load_trade_records(path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
 
 
 def append_trade_record(record: dict, path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
+    if default_sqlite_enabled(path):
+        return append_trade_record_to_sqlite(record)
+
     path.parent.mkdir(parents=True, exist_ok=True)
 
     existing = load_trade_records(path)

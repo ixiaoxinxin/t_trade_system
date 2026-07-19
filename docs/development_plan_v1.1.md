@@ -94,6 +94,10 @@ v2.0 已完成工程基线，v2.4 已完成板块资金与行业过滤第一阶�
 
 v2.5 默认选择 SQLite。原因是免费、轻量、无需服务、Python 标准库即可写入，适合当前个人本地决策系统；默认文件为 `data/dataset/trade_dataset.sqlite3`。后续若样本达到百万级或需要复杂分析查询，再增加 DuckDB；若需要多设备并发或多人协作，再迁移 PostgreSQL。
 
+### 存储迁移决策
+
+从 v2.5 起，页面数据源以 SQLite 为准，CSV/Markdown/JSON 退为兼容导入层。当前版本新增本地迁移能力，把 `output/` 页面输出、报告文档、`cache/daily` 日线缓存、`cache/minute` 分钟缓存、真实交易记录统一迁入 `data/dataset/trade_dataset.sqlite3`。后续每个策略脚本再逐步从“写文件后迁移”改成“直接写 SQLite”。
+
 ### 任务
 
 - 设计样本主表：股票代码、预测日期、特征日期、模型版本、规则版本。
@@ -149,7 +153,7 @@ v2.5 默认选择 SQLite。原因是免费、轻量、无需服务、Python 标�
 - 支持按时间滚动切分。
 - 未配置大模型 API Key 时，数据集仍可生成。
 - 配置大模型 API Key 后，可生成结构化辅助标签、冲突说明和成本统计。
-- 页面可手动新增真实交易记录，并写入 `output/trade_records.csv`。
+- 页面可手动新增真实交易记录，并写入 SQLite 的 `trade_records` 表。
 
 ### 风险
 

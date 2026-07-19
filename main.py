@@ -65,16 +65,14 @@ COMMANDS = {
         "runner": ("dataset_builder", "build_dataset"),
         "outputs": [
             "data/dataset/trade_dataset.sqlite3",
-            "data/dataset/dataset_samples.csv",
-            "data/dataset/feature_snapshot.csv",
-            "data/dataset/label_snapshot.csv",
-            "data/dataset/prediction_log.csv",
-            "data/dataset/trade_records.csv",
-            "data/dataset/llm_label_snapshot.csv",
-            "data/dataset/api_usage_log.csv",
             "data/dataset/splits/latest.json",
             "output/dataset_quality_report.md",
         ],
+    },
+    "migrate-db": {
+        "description": "迁移本地页面数据与行情缓存到 SQLite",
+        "runner": ("sqlite_store", "migrate_local_files_to_sqlite"),
+        "outputs": ["data/dataset/trade_dataset.sqlite3"],
     },
 }
 

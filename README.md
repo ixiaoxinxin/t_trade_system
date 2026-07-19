@@ -60,6 +60,7 @@ python main.py next-day
 python main.py review
 python main.py factor-rank
 python main.py dataset
+python main.py migrate-db
 ```
 
 每次通过 `main.py` 运行后，会生成：
@@ -96,15 +97,10 @@ streamlit run app.py
 - `output/factor_performance.csv`
 - `output/run_manifest.json`
 - `data/dataset/trade_dataset.sqlite3`
-- `data/dataset/dataset_samples.csv`
-- `data/dataset/feature_snapshot.csv`
-- `data/dataset/label_snapshot.csv`
-- `data/dataset/prediction_log.csv`
-- `data/dataset/trade_records.csv`
-- `data/dataset/llm_label_snapshot.csv`
-- `data/dataset/api_usage_log.csv`
 - `data/dataset/splits/latest.json`
 - `output/dataset_quality_report.md`
+
+v2.5 起，SQLite 是页面和训练数据的主存储。旧 CSV/Markdown/JSON 文件只作为兼容导入或过渡导出，页面读取优先走 `data/dataset/trade_dataset.sqlite3`。
 
 ## 常见问题
 
@@ -128,4 +124,4 @@ v2.0 不再只看“次日最高达到 1% 且未触发 -2%”，而是先判断�
 
 ### 数据集为什么用 SQLite？
 
-v2.5 默认用 SQLite：免费、轻量、无需启动服务，数据库文件位于 `data/dataset/trade_dataset.sqlite3`。后续样本量变大后，可从 CSV/SQLite 迁移到 DuckDB 或 PostgreSQL。
+v2.5 默认用 SQLite：免费、轻量、无需启动服务，数据库文件位于 `data/dataset/trade_dataset.sqlite3`。页面输出、报告文档、真实交易记录、日线缓存和分钟缓存都会迁入 SQLite。后续样本量变大后，可从 SQLite 迁移到 DuckDB 或 PostgreSQL。

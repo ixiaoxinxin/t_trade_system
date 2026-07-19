@@ -13,6 +13,7 @@ import pandas as pd
 
 from common import PRODUCT_VERSION, load_yaml_config, normalize_code, safe_float
 from llm_labeler import build_llm_tables as build_llm_label_tables
+from sqlite_store import migrate_local_files_to_sqlite
 from trade_journal import TRADE_RECORD_COLUMNS, TRADE_RECORD_FILE, load_trade_records
 
 
@@ -642,7 +643,7 @@ def build_dataset() -> dict:
             table_name: int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
             for table_name in TABLE_SCHEMAS
         }
-        outputs = export_tables(conn, export_dir)
+        outputs = []
 
     split_path = build_split(samples_df, split_dir)
     outputs.append(split_path)
@@ -656,6 +657,7 @@ def build_dataset() -> dict:
         outputs=outputs,
         llm_enabled=bool(config.get("llm_labeling", {}).get("enabled", False)),
     )
+    migration_summary = migrate_local_files_to_sqlite(db_path)
 
     print("v2.5 数据集已生成。")
     print(f"SQLite 数据库：{db_path}")
@@ -669,6 +671,7 @@ def build_dataset() -> dict:
         "quality_report": str(QUALITY_REPORT_FILE),
         "outputs": outputs,
         "counts": table_counts,
+        "migration": migration_summary,
     }
 
 
