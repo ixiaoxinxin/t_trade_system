@@ -1,6 +1,6 @@
 {
   "product_version": "2.0",
-  "generated_at": "2026-07-19 16:17:57",
+  "generated_at": "2026-07-19 16:33:31",
   "command": "dataset",
   "config_summary": {
     "max_count": null
@@ -10,8 +10,8 @@
       "name": "dataset",
       "description": "生成 v2.5 训练数据集与标签系统",
       "success": true,
-      "started_at": "2026-07-19 16:17:50",
-      "finished_at": "2026-07-19 16:17:57",
+      "started_at": "2026-07-19 16:33:23",
+      "finished_at": "2026-07-19 16:33:31",
       "outputs": [
         "data/dataset/trade_dataset.sqlite3",
         "data/dataset/splits/latest.json",

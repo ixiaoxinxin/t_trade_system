@@ -70,8 +70,12 @@ dataset:
 - 已新增 `dataset_builder.py`，负责从交易池、次日验证、市场环境、运行记录和真实交易记录生成数据集。
 - 已新增 `llm_labeler.py`，支持 DeepSeek、豆包、通义千问、智谱等 OpenAI-compatible API 配置；默认关闭，缺少 API Key 时自动跳过，不阻断数据集生成。
 - 已新增 `sqlite_store.py`，负责把本地页面输出、Markdown/JSON 报告、日线缓存、分钟缓存迁移到 SQLite。
+- 已新增 `label_calculator.py`，负责从次日验证结果计算 `label_snapshot`。
+- 已新增 `dataset_splitter.py`，负责生成时间序列训练/验证/测试切分。
+- 已新增 `dataset_quality_report.py`，负责生成质量报告和 `label_review_queue`。
 - 已新增 `python main.py dataset` 统一入口。
 - 已新增 `python main.py migrate-db` 迁移入口。
+- 已新增 `python main.py labels`、`python main.py split`、`python main.py quality` 独立入口。
 - 已新增 Streamlit 页面「生成数据集」「迁移数据库」按钮和「数据集」Tab。
 - 页面读取优先走 SQLite；CSV/Markdown/JSON 只作为兼容导入和过渡层。
 - 已新增时间序列切分文件：`data/dataset/splits/latest.json`，当前先按预测日期 70% / 15% / 15% 切分；样本量扩大后升级为 2年 / 3个月 / 1个月滚动窗口。
@@ -277,7 +281,7 @@ dataset:
 ### 4.5 标签融合规则
 
 - 大模型输出 `label_confidence < 0.70`：只记录备注，不更新辅助标签。
-- 大模型与规则标签冲突：写入 `label_review_queue.csv`，等待人工确认。
+- 大模型与规则标签冲突：写入 SQLite 的 `label_review_queue` 表，并生成 `output/label_review_queue.md` 供人工确认。
 - 大模型只允许更新 `realized_path_type`、`execution_quality`、`llm_reason`、`needs_manual_review`。
 - 所有大模型结果必须记录 `provider`、`model`、`prompt_version`、`input_tokens`、`output_tokens`、`cost_estimate`。
 
@@ -422,7 +426,7 @@ llm_labeling:
 - 新增 `label_calculator.py`。
 - 读取次日 OHLC 和分时数据。
 - 计算 `touch_buy_range`、`hit_1pct_after_touch`、`hit_2pct_after_touch`、`stop_2pct_after_touch`、`first_event`。
-- 输出 `data/dataset/label_snapshot.csv`。
+- 输出 SQLite 表 `label_snapshot`。
 
 验收：
 
@@ -438,15 +442,15 @@ llm_labeling:
 - 新增 `prompts/labeling_v2.5.md`。
 - 支持 OpenAI-compatible API 客户端。
 - 支持 DeepSeek、豆包、通义、智谱的 provider 配置。
-- 输出 `data/dataset/llm_label_snapshot.csv` 和 `data/dataset/label_review_queue.csv`。
-- 输出 `data/dataset/api_usage_log.csv`，记录供应商、模型、token 和估算成本。
+- 输出 SQLite 表 `llm_label_snapshot` 和 `label_review_queue`。
+- 输出 SQLite 表 `api_usage_log`，记录供应商、模型、token 和估算成本。
 
 验收：
 
 - 未配置 API Key 时不会阻断数据集生成。
 - 配置 API Key 后可对小样本生成结构化 JSON 辅助标签。
 - 调用失败时按 `provider_priority` 自动回退。
-- 冲突样本进入人工复核队列。当前 2.1 先记录 `needs_manual_review` 和 `conflict_fields`，后续补独立队列文件。
+- 冲突样本进入人工复核队列，SQLite 表为 `label_review_queue`，人工查看文件为 `output/label_review_queue.md`。
 
 ### M4 数据质量报告
 
@@ -481,7 +485,7 @@ llm_labeling:
 - SQLite 的 `trade_records` 表可记录真实交易，并作为个性化样本输入。
 - 标签计算可在无大模型 API Key 时完成。
 - 大模型辅助标签可配置开启，并支持成本上限。
-- `label_review_queue.csv` 能收集冲突和低置信样本。
+- SQLite 表 `label_review_queue` 能收集冲突和低置信样本。
 - 质量报告能说明样本覆盖率、缺失率、冲突率和 LLM 调用成本。
 - v2.6 可以直接读取 v2.5 数据集训练方向模型。
 

@@ -12,6 +12,9 @@ from typing import Any
 import pandas as pd
 
 from common import PRODUCT_VERSION, load_yaml_config, normalize_code, safe_float
+from dataset_quality_report import LABEL_REVIEW_QUEUE_FILE, write_quality_report as write_dataset_quality_report
+from dataset_splitter import build_time_series_split
+from label_calculator import calculate_label_snapshot
 from llm_labeler import build_llm_tables as build_llm_label_tables
 from sqlite_store import migrate_local_files_to_sqlite
 from trade_journal import TRADE_RECORD_COLUMNS, TRADE_RECORD_FILE, load_trade_records
@@ -185,6 +188,14 @@ TABLE_SCHEMAS = {
         status TEXT,
         created_at TEXT
     """,
+    "label_review_queue": """
+        sample_id TEXT,
+        stock_code TEXT,
+        review_type TEXT,
+        severity TEXT,
+        reason TEXT,
+        created_at TEXT
+    """,
 }
 
 
@@ -279,6 +290,19 @@ def insert_dataframe(conn: sqlite3.Connection, table_name: str, df: pd.DataFrame
     df.to_sql(table_name, conn, if_exists="append", index=False)
 
 
+def combine_frames(frames: list[pd.DataFrame], dedupe_key: str) -> pd.DataFrame:
+    usable = [
+        df.dropna(axis=1, how="all")
+        for df in frames
+        if not df.empty
+    ]
+
+    if not usable:
+        return pd.DataFrame()
+
+    return pd.concat(usable, ignore_index=True).drop_duplicates(dedupe_key, keep="first")
+
+
 def build_samples(
     final_df: pd.DataFrame,
     manifest: dict,
@@ -308,6 +332,40 @@ def build_samples(
             "run_id": run_id,
             "source_files": ";".join(sources),
             "data_status": "ready",
+        })
+
+    return pd.DataFrame(rows)
+
+
+def build_review_samples(
+    next_day_df: pd.DataFrame,
+    manifest: dict,
+    sources: list[str],
+) -> pd.DataFrame:
+    rule_version = f"v{PRODUCT_VERSION}"
+    run_id = manifest.get("generated_at", "")
+    cfg_hash = config_hash()
+    rows = []
+
+    for _, row in next_day_df.iterrows():
+        code = normalize_code(row.get("股票代码", ""))
+        predict_date = str(row.get("验证日期", ""))[:10]
+
+        if not code or not predict_date:
+            continue
+
+        rows.append({
+            "sample_id": sample_id(code, predict_date, rule_version),
+            "stock_code": code,
+            "stock_name": str(row.get("股票名称", "")),
+            "predict_date": predict_date,
+            "feature_date": predict_date,
+            "target_date": str(row.get("次日日期", ""))[:10],
+            "rule_version": rule_version,
+            "config_hash": cfg_hash,
+            "run_id": run_id,
+            "source_files": ";".join(sources),
+            "data_status": "ready_from_review",
         })
 
     return pd.DataFrame(rows)
@@ -376,6 +434,70 @@ def build_feature_snapshot(
             "final_score": safe_float(row.get("最终评分", 0)),
             "overnight_grade": str(row.get("隔夜建议等级", "")),
             "risk_level": str(row.get("风险等级", "")),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def build_review_feature_snapshot(next_day_df: pd.DataFrame) -> pd.DataFrame:
+    rule_version = f"v{PRODUCT_VERSION}"
+    rows = []
+
+    for _, row in next_day_df.iterrows():
+        code = normalize_code(row.get("股票代码", ""))
+        predict_date = str(row.get("验证日期", ""))[:10]
+
+        if not code or not predict_date:
+            continue
+
+        structure = str(row.get("分时结构标签", ""))
+
+        rows.append({
+            "sample_id": sample_id(code, predict_date, rule_version),
+            "stock_code": code,
+            "feature_date": predict_date,
+            "ret_1d": None,
+            "ret_3d": None,
+            "ret_5d": None,
+            "ret_20d": None,
+            "ma5_gap": None,
+            "ma10_gap": None,
+            "ma20_gap": None,
+            "ma5_slope": None,
+            "ma10_slope": None,
+            "atr_14": None,
+            "hist_vol_20": None,
+            "range_5d": None,
+            "amount": None,
+            "avg_amount_5d": None,
+            "turnover_rate": None,
+            "volume_ratio": None,
+            "body_pct": None,
+            "upper_shadow_pct": None,
+            "lower_shadow_pct": None,
+            "gap_open_pct": None,
+            "open_strength": None,
+            "first_15m_return": None,
+            "first_15m_drawdown": None,
+            "vwap_gap": None,
+            "path_rebound": path_flag(structure, ["修复", "回升", "转强"]),
+            "path_fade": path_flag(structure, ["回落", "失败", "弱势"]),
+            "path_break_morning_high": None,
+            "market_regime": "",
+            "market_risk_level": "",
+            "market_atr": None,
+            "panic_score": None,
+            "sector_name": str(row.get("所属板块", "")),
+            "sector_status": "",
+            "sector_rank_1d": None,
+            "sector_rank_5d": None,
+            "sector_breadth": None,
+            "sector_leader_pct": None,
+            "candidate_score": safe_float(row.get("候选评分", 0)),
+            "tail_score": safe_float(row.get("尾盘评分", 0)),
+            "final_score": safe_float(row.get("最终评分", 0)),
+            "overnight_grade": str(row.get("隔夜建议等级", "")),
+            "risk_level": "",
         })
 
     return pd.DataFrame(rows)
@@ -621,9 +743,15 @@ def build_dataset() -> dict:
         ] if path.exists()
     ]
 
-    samples_df = build_samples(final_df, manifest, sources)
-    feature_df = build_feature_snapshot(final_df, market_env, manifest)
-    label_df = build_label_snapshot(next_day_df)
+    samples_df = combine_frames([
+        build_samples(final_df, manifest, sources),
+        build_review_samples(next_day_df, manifest, sources),
+    ], "sample_id")
+    feature_df = combine_frames([
+        build_feature_snapshot(final_df, market_env, manifest),
+        build_review_feature_snapshot(next_day_df),
+    ], "sample_id")
+    label_df = calculate_label_snapshot(next_day_df)
     prediction_df = build_prediction_log(final_df, manifest)
     trade_df = build_trade_record_table()
     llm_df, usage_df = build_llm_label_tables(config, samples_df, label_df)
@@ -645,12 +773,13 @@ def build_dataset() -> dict:
         }
         outputs = []
 
-    split_path = build_split(samples_df, split_dir)
+    split_path = build_time_series_split(samples_df, split_dir)
     outputs.append(split_path)
     outputs.append(str(db_path))
     outputs.append(str(QUALITY_REPORT_FILE))
+    outputs.append(str(LABEL_REVIEW_QUEUE_FILE))
 
-    write_quality_report(
+    write_dataset_quality_report(
         table_counts=table_counts,
         db_path=db_path,
         split_path=split_path,

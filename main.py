@@ -74,6 +74,21 @@ COMMANDS = {
         "runner": ("sqlite_store", "migrate_local_files_to_sqlite"),
         "outputs": ["data/dataset/trade_dataset.sqlite3"],
     },
+    "labels": {
+        "description": "计算 v2.5 标签并写入 SQLite",
+        "runner": ("label_calculator", "run_label_calculator"),
+        "outputs": ["data/dataset/trade_dataset.sqlite3"],
+    },
+    "split": {
+        "description": "生成 v2.5 时间序列训练/验证/测试切分",
+        "runner": ("dataset_splitter", "run_dataset_splitter"),
+        "outputs": ["data/dataset/splits/latest.json"],
+    },
+    "quality": {
+        "description": "生成 v2.5 数据质量报告与标签复核队列",
+        "runner": ("dataset_quality_report", "run_dataset_quality_report"),
+        "outputs": ["output/dataset_quality_report.md", "output/label_review_queue.md"],
+    },
 }
 
 

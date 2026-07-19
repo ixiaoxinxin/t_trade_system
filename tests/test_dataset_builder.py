@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from dataset_builder import build_split, sample_id, yes_no_to_int
+from dataset_builder import sample_id, yes_no_to_int
+from dataset_splitter import build_time_series_split
 from llm_labeler import estimate_cost
 
 
@@ -34,14 +35,15 @@ class DatasetBuilderTest(unittest.TestCase):
         ])
 
         with TemporaryDirectory() as temp_dir:
-            split_path = build_split(samples, Path(temp_dir))
+            split_path = build_time_series_split(samples, Path(temp_dir))
             split = json.loads(Path(split_path).read_text(encoding="utf-8"))
 
-        self.assertEqual(split["method"], "chronological")
+        self.assertEqual(split["method"], "chronological_fallback")
         self.assertEqual(split["counts"]["total"], 4)
         self.assertEqual(split["train"], ["a", "b"])
         self.assertEqual(split["validation"], ["c"])
         self.assertEqual(split["test"], ["d"])
+        self.assertEqual(split["date_ranges"]["all"]["start"], "2026-07-19")
 
     def test_estimate_cost_uses_provider_prices(self):
         cost = estimate_cost(

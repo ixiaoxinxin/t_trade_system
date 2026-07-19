@@ -61,6 +61,9 @@ python main.py review
 python main.py factor-rank
 python main.py dataset
 python main.py migrate-db
+python main.py labels
+python main.py split
+python main.py quality
 ```
 
 每次通过 `main.py` 运行后，会生成：
@@ -99,6 +102,7 @@ streamlit run app.py
 - `data/dataset/trade_dataset.sqlite3`
 - `data/dataset/splits/latest.json`
 - `output/dataset_quality_report.md`
+- `output/label_review_queue.md`
 
 v2.5 起，SQLite 是页面和训练数据的主存储。旧 CSV/Markdown/JSON 文件只作为兼容导入或过渡导出，页面读取优先走 `data/dataset/trade_dataset.sqlite3`。
 
