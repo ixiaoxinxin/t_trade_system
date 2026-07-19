@@ -134,6 +134,15 @@ COMMANDS = {
             "output/model_explanations_v2.8.csv",
         ],
     },
+    "prediction-review": {
+        "description": "生成 v2.9 预测回顾与模型评分",
+        "runner": ("prediction_review", "run_prediction_review"),
+        "outputs": [
+            "output/prediction_review_v2.9.csv",
+            "output/model_scorecard_v2.9.csv",
+            "output/prediction_review_v2.9.md",
+        ],
+    },
 }
 
 

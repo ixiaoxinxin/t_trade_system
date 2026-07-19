@@ -65,6 +65,9 @@ PROFIT_PROBABILITY_EVALUATION_MD_FILE = Path("output/profit_probability_evaluati
 CALIBRATED_PROBABILITY_FILE = Path("output/calibrated_probabilities_v2.8.csv")
 MODEL_EXPLANATION_FILE = Path("output/model_explanations_v2.8.csv")
 CALIBRATION_REPORT_FILE = Path("output/probability_calibration_v2.8.md")
+PREDICTION_REVIEW_FILE = Path("output/prediction_review_v2.9.csv")
+MODEL_SCORECARD_FILE = Path("output/model_scorecard_v2.9.csv")
+PREDICTION_REVIEW_REPORT_FILE = Path("output/prediction_review_v2.9.md")
 FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 
@@ -640,6 +643,8 @@ model_prediction_df = load_csv(MODEL_PREDICTION_FILE)
 profit_probability_df = load_csv(PROFIT_PROBABILITY_FILE)
 calibrated_probability_df = load_csv(CALIBRATED_PROBABILITY_FILE)
 model_explanation_df = load_csv(MODEL_EXPLANATION_FILE)
+prediction_review_df = load_csv(PREDICTION_REVIEW_FILE)
+model_scorecard_df = load_csv(MODEL_SCORECARD_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -652,6 +657,7 @@ dataset_quality_md = load_markdown(DATASET_QUALITY_REPORT_FILE)
 model_evaluation_md = load_markdown(MODEL_EVALUATION_MD_FILE)
 profit_probability_evaluation_md = load_markdown(PROFIT_PROBABILITY_EVALUATION_MD_FILE)
 calibration_report_md = load_markdown(CALIBRATION_REPORT_FILE)
+prediction_review_report_md = load_markdown(PREDICTION_REVIEW_REPORT_FILE)
 
 final_df = mark_fixed_holdings(final_df)
 sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
@@ -1068,7 +1074,7 @@ def render_model_training_panel() -> None:
     st.subheader("模型训练")
     st.caption("先保存训练数据，再训练 v2.6 方向模型。这里主要看样本量、标签覆盖和模型评估。")
 
-    train_col1, train_col2, train_col3 = st.columns(3)
+    train_col1, train_col2, train_col3, train_col4 = st.columns(4)
 
     with train_col1:
         if st.button("训练方向模型", width="stretch"):
@@ -1081,6 +1087,10 @@ def render_model_training_panel() -> None:
     with train_col3:
         if st.button("生成校准与解释", width="stretch"):
             run_main_command_and_refresh("calibrate-explain")
+
+    with train_col4:
+        if st.button("生成预测回顾", width="stretch"):
+            run_main_command_and_refresh("prediction-review")
 
     (
         dataset_samples_df,
@@ -1121,6 +1131,12 @@ def render_model_training_panel() -> None:
             st.markdown(calibration_report_md)
     else:
         st.info("暂无 v2.8 概率校准与解释报告，请先点击【生成校准与解释】。")
+
+    if prediction_review_report_md:
+        with st.expander("展开 v2.9 预测回顾与模型评分报告", expanded=True):
+            st.markdown(prediction_review_report_md)
+    else:
+        st.info("暂无 v2.9 预测回顾报告，请先点击【生成预测回顾】。")
 
     show_table("样本主表预览", dataset_samples_df.head(20))
 
@@ -1267,6 +1283,31 @@ def render_model_prediction_panel() -> None:
                 "偏多因素",
                 "偏空因素",
                 "解释方法",
+            ],
+        ),
+    )
+
+    scorecard_show_df = model_scorecard_df.rename(columns={
+        "model_version": "模型版本",
+        "metric_name": "指标",
+        "segment_type": "分组类型",
+        "segment_value": "分组",
+        "sample_count": "样本数",
+        "score": "分数",
+        "created_at": "生成时间",
+    })
+    show_table(
+        "v2.9 模型评分卡",
+        keep_columns(
+            scorecard_show_df,
+            [
+                "模型版本",
+                "指标",
+                "分组类型",
+                "分组",
+                "样本数",
+                "分数",
+                "生成时间",
             ],
         ),
     )

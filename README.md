@@ -138,6 +138,14 @@ python main.py calibrate-explain
 
 输出校准报告、校准后概率和单票多空因素：`output/probability_calibration_v2.8.md`、`output/calibrated_probabilities_v2.8.csv`、`output/model_explanations_v2.8.csv`。
 
+## v2.9 预测回顾与模型评分
+
+```bash
+python main.py prediction-review
+```
+
+输出预测回顾、模型评分卡和回顾报告：`output/prediction_review_v2.9.csv`、`output/model_scorecard_v2.9.csv`、`output/prediction_review_v2.9.md`。
+
 ## 常见问题
 
 ### 行情接口失败怎么办？

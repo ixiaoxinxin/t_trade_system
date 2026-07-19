@@ -1,0 +1,90 @@
+# v2.9 预测回顾与模型评分需求文档
+
+## 1. 目标
+
+v2.9 建立预测闭环，回答：
+
+- 昨天模型预测准不准。
+- 哪个模型版本更可靠。
+- 概率分桶后的实际表现是否匹配。
+- 模型在哪些市场环境、行业/板块下更容易失效。
+
+本版本不训练新模型，只做回顾、评分和可复现报告。
+
+## 2. 输入
+
+- v2.6 方向预测：`output/model_predictions_v2.6.csv`
+- v2.7 收益目标概率：`output/profit_probabilities_v2.7.csv`
+- v2.8 校准后概率：`output/calibrated_probabilities_v2.8.csv`
+- SQLite 标签表：`label_snapshot`
+- SQLite 样本表：`dataset_samples`
+- SQLite 特征表：`feature_snapshot`
+
+## 3. 回顾字段
+
+输出 `prediction_review_results`：
+
+- 预测日期。
+- 目标日期。
+- 股票代码、股票名称。
+- 方向模型版本。
+- 收益目标模型版本。
+- 校准模型版本。
+- 次日上涨概率。
+- 达到 +1% 概率。
+- 达到 +2% 概率。
+- 止损概率。
+- 校准后概率。
+- 实际方向标签。
+- 实际 +1%/+2%/止损标签。
+- 方向是否命中。
+- 概率桶。
+- 市场环境。
+- 所属板块。
+
+## 4. 模型评分
+
+输出 `model_scorecard`：
+
+- 方向命中率。
+- +1% / +2% / 止损 Brier Score。
+- 校准后 +1% / +2% / 止损 Brier Score。
+- 分市场环境命中率。
+- 分行业/板块实际发生率。
+- 分概率桶实际发生率。
+
+## 5. 页面
+
+页面结构不变：
+
+- 模型训练：新增「生成预测回顾」按钮。
+- 模型训练：展示 v2.9 预测回顾报告。
+- 模型预测：展示 v2.9 模型评分卡。
+
+## 6. CLI
+
+```bash
+python main.py prediction-review
+```
+
+## 7. 输出
+
+- `output/prediction_review_v2.9.csv`
+- `output/model_scorecard_v2.9.csv`
+- `output/prediction_review_v2.9.md`
+- SQLite 表：`prediction_review_results`
+- SQLite 表：`model_scorecard`
+
+## 8. 验收标准
+
+- `python main.py prediction-review` 可生成回顾明细、评分卡和报告。
+- 每条回顾能关联样本、预测、标签和模型版本。
+- 模型评分卡可按模型版本、市场、行业、概率桶查看表现。
+- 页面可查看预测回顾报告和模型评分卡。
+- v3.0 可以读取评分卡辅助规则评分和模型概率融合。
+
+## 9. 风险
+
+- 如果某天没有先运行预测，回顾只能统计已有预测。
+- 当前样本量少，分行业和概率桶统计只做观察。
+- 单票预测命令会覆盖全量预测 CSV，验收前应保留全量预测结果。
