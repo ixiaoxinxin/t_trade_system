@@ -68,6 +68,8 @@ CALIBRATION_REPORT_FILE = Path("output/probability_calibration_v2.8.md")
 PREDICTION_REVIEW_FILE = Path("output/prediction_review_v2.9.csv")
 MODEL_SCORECARD_FILE = Path("output/model_scorecard_v2.9.csv")
 PREDICTION_REVIEW_REPORT_FILE = Path("output/prediction_review_v2.9.md")
+FINAL_DECISION_FILE = Path("output/final_decision_v3.0.csv")
+FINAL_DECISION_MD_FILE = Path("output/final_decision_v3.0.md")
 FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 
@@ -343,6 +345,42 @@ def add_profit_probability(df: pd.DataFrame, probability_df: pd.DataFrame) -> pd
     return merged
 
 
+def add_final_decision(df: pd.DataFrame, decision_df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or decision_df.empty or "股票代码" not in df.columns:
+        return df
+
+    if "stock_code" not in decision_df.columns:
+        return df
+
+    decision = decision_df.copy()
+    decision["股票代码"] = decision["stock_code"].astype(str).str.zfill(6)
+    decision = decision.sort_values("created_at").drop_duplicates("股票代码", keep="last")
+    decision = decision.rename(columns={
+        "final_action": "最终操作",
+        "fusion_score": "融合评分",
+        "decision_reason": "操作解释",
+        "risk_reward_ratio": "风险收益比",
+        "model_quality_score": "模型可信度",
+    })
+
+    columns = [
+        "股票代码",
+        "最终操作",
+        "融合评分",
+        "操作解释",
+        "风险收益比",
+        "模型可信度",
+    ]
+    existing = [col for col in columns if col in decision.columns]
+
+    merged = df.merge(decision[existing], on="股票代码", how="left")
+    for col in ["融合评分", "模型可信度"]:
+        if col in merged.columns:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
+
+    return merged
+
+
 def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -477,6 +515,7 @@ def render_fixed_holding_snapshot(
 
     signal_df = load_csv(FIXED_HOLDINGS_SIGNAL_FILE)
     signal_df = add_profit_probability(add_model_probability(signal_df, prediction_df), profit_probability_df)
+    signal_df = add_final_decision(signal_df, final_decision_df)
 
     if signal_df.empty:
         st.info("暂无固定持仓买卖点，请点击【刷新持仓买卖点】。")
@@ -489,6 +528,9 @@ def render_fixed_holding_snapshot(
                     "刷新时间",
                     "股票代码",
                     "股票名称",
+                    "最终操作",
+                    "融合评分",
+                    "操作解释",
                     "当前价",
                     "买点下限",
                     "买点上限",
@@ -536,6 +578,7 @@ def render_fixed_holding_snapshot(
 
     fixed_df = pd.concat(frames, ignore_index=True)
     fixed_df = add_profit_probability(add_model_probability(fixed_df, prediction_df), profit_probability_df)
+    fixed_df = add_final_decision(fixed_df, final_decision_df)
     show_table(
         "固定持仓验证状态",
         keep_columns(
@@ -545,6 +588,9 @@ def render_fixed_holding_snapshot(
                 "股票代码",
                 "股票名称",
                 "固定持仓",
+                "最终操作",
+                "融合评分",
+                "操作解释",
                 "行情刷新状态",
                 "次日上涨概率",
                 "方向置信度",
@@ -645,6 +691,7 @@ calibrated_probability_df = load_csv(CALIBRATED_PROBABILITY_FILE)
 model_explanation_df = load_csv(MODEL_EXPLANATION_FILE)
 prediction_review_df = load_csv(PREDICTION_REVIEW_FILE)
 model_scorecard_df = load_csv(MODEL_SCORECARD_FILE)
+final_decision_df = load_csv(FINAL_DECISION_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -658,6 +705,7 @@ model_evaluation_md = load_markdown(MODEL_EVALUATION_MD_FILE)
 profit_probability_evaluation_md = load_markdown(PROFIT_PROBABILITY_EVALUATION_MD_FILE)
 calibration_report_md = load_markdown(CALIBRATION_REPORT_FILE)
 prediction_review_report_md = load_markdown(PREDICTION_REVIEW_REPORT_FILE)
+final_decision_md = load_markdown(FINAL_DECISION_MD_FILE)
 
 final_df = mark_fixed_holdings(final_df)
 sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
@@ -850,6 +898,52 @@ def render_trade_plan_panel() -> None:
     st.subheader("明日计划")
     st.caption("生成明日计划会自动串起市场环境、候选扫描、尾盘确认和交易计划。日常只看 A/B 候选。")
 
+    if st.button("刷新最终决策", key="refresh_final_decision", width="stretch"):
+        run_main_command_and_refresh("decision-fusion")
+
+    if not final_decision_df.empty:
+        final_show_df = final_decision_df.copy()
+        final_show_df["股票代码"] = final_show_df["stock_code"].astype(str).str.zfill(6)
+        final_show_df = final_show_df.rename(columns={
+            "stock_name": "股票名称",
+            "is_fixed_holding": "固定持仓",
+            "rule_grade": "规则等级",
+            "fusion_score": "融合评分",
+            "next_day_up_probability": "次日上涨概率",
+            "hit_1pct_probability": "达到1%概率",
+            "hit_2pct_probability": "达到2%概率",
+            "stop_2pct_probability": "止损概率",
+            "final_action": "最终操作",
+            "decision_reason": "操作解释",
+            "risk_reward_ratio": "风险收益比",
+        })
+        show_table(
+            "v3.0 最终操作",
+            keep_columns(
+                final_show_df,
+                [
+                    "固定持仓",
+                    "股票代码",
+                    "股票名称",
+                    "最终操作",
+                    "融合评分",
+                    "规则等级",
+                    "次日上涨概率",
+                    "达到1%概率",
+                    "达到2%概率",
+                    "止损概率",
+                    "风险收益比",
+                    "操作解释",
+                ],
+            ).head(12),
+        )
+    else:
+        st.info("暂无 v3.0 最终决策，请先运行模型预测后点击【刷新最终决策】。")
+
+    if final_decision_md:
+        with st.expander("展开最终决策报告", expanded=False):
+            st.markdown(final_decision_md)
+
     if daily_plan_md:
         with st.expander("展开交易计划原始报告", expanded=False):
             st.markdown(daily_plan_md)
@@ -865,12 +959,19 @@ def render_trade_plan_panel() -> None:
         trade_df = sorted_final_df.copy()
 
     trade_df = keep_columns(
-        add_profit_probability(add_model_probability(trade_df, model_prediction_df), profit_probability_df),
+        add_final_decision(
+            add_profit_probability(add_model_probability(trade_df, model_prediction_df), profit_probability_df),
+            final_decision_df,
+        ),
         [
             "固定持仓",
             "置顶原因",
             "股票代码",
             "股票名称",
+            "最终操作",
+            "融合评分",
+            "操作解释",
+            "风险收益比",
             "次日上涨概率",
             "方向置信度",
             "模型方向",

@@ -174,6 +174,8 @@ feat: integrate final decision into trade plan
 - 明日计划 Tab 展示最终操作、融合评分、模型依据、风控理由。
 - 固定持仓 Tab 展示持仓侧操作：继续持有、减仓、止盈、止损。
 - 输出 `output/final_decision_v3.0.md`。
+- 当前已实现：`python main.py plan` 会尝试刷新融合决策，并在 `daily_plan.md` 增加 v3.0 最终操作与固定持仓处理章节。
+- 当前已实现：Streamlit 明日计划 Tab 展示 `v3.0 最终操作` 表，固定持仓 Tab 展示最终操作、融合评分和操作解释。
 
 验收：
 

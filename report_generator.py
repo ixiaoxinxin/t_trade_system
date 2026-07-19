@@ -28,6 +28,7 @@ FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
 CANDIDATES_FILE = Path("output/overnight_t_candidates.csv")
 MARKET_ENV_FILE = Path("output/market_environment.json")
 OUTPUT_FILE = Path("output/daily_plan.md")
+FINAL_DECISION_FILE = Path("output/final_decision_v3.0.csv")
 
 
 def load_config() -> dict:
@@ -413,6 +414,71 @@ def make_markdown_table(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def refresh_final_decision() -> tuple[pd.DataFrame, str]:
+    try:
+        from decision_fusion import run_decision_fusion
+
+        run_decision_fusion()
+    except Exception as exc:
+        return load_final_decision(), f"融合决策未刷新：{exc}"
+
+    return load_final_decision(), "融合决策已刷新。"
+
+
+def load_final_decision() -> pd.DataFrame:
+    if not FINAL_DECISION_FILE.exists():
+        return pd.DataFrame()
+
+    try:
+        df = pd.read_csv(FINAL_DECISION_FILE, dtype={"stock_code": str}, encoding="utf-8-sig")
+    except Exception:
+        return pd.DataFrame()
+
+    if "stock_code" in df.columns:
+        df["stock_code"] = df["stock_code"].apply(normalize_code)
+
+    return df
+
+
+def make_final_decision_table(decision_df: pd.DataFrame, *, fixed_only: bool | None = None, limit: int = 12) -> str:
+    if decision_df.empty:
+        return "无。\n"
+
+    work = decision_df.copy()
+    if fixed_only is not None and "is_fixed_holding" in work.columns:
+        work = work[work["is_fixed_holding"].astype(str).isin(["True", "true", "1"]) == fixed_only].copy()
+
+    if work.empty:
+        return "无。\n"
+
+    work = work.sort_values(["is_fixed_holding", "fusion_score"], ascending=[False, False]).head(limit)
+
+    headers = ["股票", "固定持仓", "最终操作", "融合分", "上涨概率", "+1%概率", "止损概率", "风险收益比", "解释"]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+
+    for _, row in work.iterrows():
+        lines.append(
+            "| "
+            + " | ".join([
+                f"{normalize_code(row.get('stock_code', ''))} {format_optional_text(row.get('stock_name', ''))}",
+                "是" if str(row.get("is_fixed_holding", "")).lower() in ["true", "1"] else "否",
+                format_optional_text(row.get("final_action", "")),
+                f"{safe_float(row.get('fusion_score', 0)):.1f}",
+                f"{safe_float(row.get('next_day_up_probability', 0)):.1%}",
+                f"{safe_float(row.get('hit_1pct_probability', 0)):.1%}",
+                f"{safe_float(row.get('stop_2pct_probability', 0)):.1%}",
+                format_optional_text(row.get("risk_reward_ratio", "")),
+                format_optional_text(row.get("decision_reason", "")),
+            ])
+            + " |"
+        )
+
+    return "\n".join(lines) + "\n"
+
+
 def filter_trade_pool_by_market(df: pd.DataFrame) -> pd.DataFrame:
     """
     根据市场环境过滤交易池。
@@ -462,6 +528,7 @@ def generate_daily_plan() -> None:
     trade_rows = [build_plan_row(row) for _, row in trade_df.iterrows()]
     watch_rows = [build_plan_row(row) for _, row in watch_df.iterrows()]
     abandon_rows = [build_plan_row(row) for _, row in abandon_df.iterrows()]
+    final_decision_df, final_decision_status = refresh_final_decision()
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -512,7 +579,21 @@ def generate_daily_plan() -> None:
 
 ---
 
-## 三、明日交易池
+## 三、v3.0 最终操作
+
+{final_decision_status}
+
+### 3.1 明日重点
+
+{make_final_decision_table(final_decision_df, fixed_only=False, limit=8)}
+
+### 3.2 固定持仓处理
+
+{make_final_decision_table(final_decision_df, fixed_only=True, limit=8)}
+
+---
+
+## 四、明日交易池
 
 {trade_summary}
 
@@ -520,19 +601,19 @@ def generate_daily_plan() -> None:
 
 ---
 
-## 四、观察池
+## 五、观察池
 
 {make_markdown_table(watch_rows)}
 
 ---
 
-## 五、放弃池
+## 六、放弃池
 
 {make_markdown_table(abandon_rows)}
 
 ---
 
-## 六、盘后复盘字段
+## 七、盘后交易记录字段
 
 | 股票代码 | 是否买入 | 买入价 | 卖出价 | 盈亏 | 是否按计划执行 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
