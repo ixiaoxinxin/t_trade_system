@@ -151,6 +151,14 @@ COMMANDS = {
             "output/final_decision_v3.0.md",
         ],
     },
+    "single-stock": {
+        "description": "生成 v3.0 单票决策工作台报告",
+        "runner": ("single_stock_decision", "run_single_stock_decision"),
+        "outputs": [
+            "output/single_stock_decision.csv",
+            "output/single_stock_decision.md",
+        ],
+    },
 }
 
 
@@ -169,7 +177,7 @@ def call_runner(command_name: str, max_count: int | None = None, stock_code: str
 
         if command_name == "candidates":
             runner(max_count=max_count)
-        elif command_name in ["model-predict", "probability-predict"]:
+        elif command_name in ["model-predict", "probability-predict", "single-stock"]:
             runner(stock_code=stock_code)
         else:
             runner()
@@ -217,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stock-code",
         default=None,
-        help="仅 model-predict/probability-predict 使用，指定单只股票代码输出预测概率。",
+        help="model-predict/probability-predict/single-stock 使用，指定单只股票代码。",
     )
 
     return parser

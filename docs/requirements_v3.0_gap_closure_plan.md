@@ -203,6 +203,9 @@ feat: add single stock decision workspace
 - 输入 `002466` 可查看天齐锂业完整决策链。
 - 单票查询后，全市场预测结果不被覆盖。
 - 固定持仓可一键进入单票视图。
+- 当前已实现：新增 `single_stock_decision.py` 和 `python main.py single-stock --stock-code 002466`。
+- 当前已实现：页面新增 `单票决策` Tab，支持固定持仓快捷选择和手动输入股票代码。
+- 当前已实现：单票结果只写入 `output/single_stock_decision.csv`、`output/single_stock_decision.md`，不覆盖全市场预测。
 
 ### Commit 4：路径标签与区间回顾增强
 

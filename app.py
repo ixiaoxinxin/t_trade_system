@@ -23,7 +23,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from fixed_holdings import fixed_holding_codes, mark_fixed_holdings, sort_fixed_holdings_first
+from fixed_holdings import fixed_holding_codes, fixed_holding_name_map, mark_fixed_holdings, sort_fixed_holdings_first
 from sqlite_store import load_dataframe, load_document, migrate_local_files_to_sqlite
 from trade_journal import append_trade_record, build_trade_record, load_trade_records
 
@@ -70,6 +70,8 @@ MODEL_SCORECARD_FILE = Path("output/model_scorecard_v2.9.csv")
 PREDICTION_REVIEW_REPORT_FILE = Path("output/prediction_review_v2.9.md")
 FINAL_DECISION_FILE = Path("output/final_decision_v3.0.csv")
 FINAL_DECISION_MD_FILE = Path("output/final_decision_v3.0.md")
+SINGLE_STOCK_DECISION_FILE = Path("output/single_stock_decision.csv")
+SINGLE_STOCK_DECISION_MD_FILE = Path("output/single_stock_decision.md")
 FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 
@@ -692,6 +694,7 @@ model_explanation_df = load_csv(MODEL_EXPLANATION_FILE)
 prediction_review_df = load_csv(PREDICTION_REVIEW_FILE)
 model_scorecard_df = load_csv(MODEL_SCORECARD_FILE)
 final_decision_df = load_csv(FINAL_DECISION_FILE)
+single_stock_decision_df = load_csv(SINGLE_STOCK_DECISION_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -706,6 +709,7 @@ profit_probability_evaluation_md = load_markdown(PROFIT_PROBABILITY_EVALUATION_M
 calibration_report_md = load_markdown(CALIBRATION_REPORT_FILE)
 prediction_review_report_md = load_markdown(PREDICTION_REVIEW_REPORT_FILE)
 final_decision_md = load_markdown(FINAL_DECISION_MD_FILE)
+single_stock_decision_md = load_markdown(SINGLE_STOCK_DECISION_MD_FILE)
 
 final_df = mark_fixed_holdings(final_df)
 sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
@@ -1414,9 +1418,91 @@ def render_model_prediction_panel() -> None:
     )
 
 
-tab_plan, tab_holdings, tab_trade_records, tab_lunch, tab_model_train, tab_model_predict = st.tabs([
+def run_single_stock_and_refresh(stock_code: str) -> None:
+    with st.status(f"正在生成 {stock_code} 单票决策 ...", expanded=True) as status:
+        success, stdout, stderr = run_command(["main.py", "single-stock", "--stock-code", stock_code])
+        show_script_result("single-stock", success, stdout, stderr)
+
+        if success:
+            migrate_local_files_to_sqlite()
+            status.update(
+                label="单票决策生成完成，正在刷新页面...",
+                state="complete",
+            )
+            time.sleep(1)
+            st.rerun()
+        else:
+            status.update(
+                label="单票决策生成失败",
+                state="error",
+            )
+
+
+def render_single_stock_panel() -> None:
+    st.subheader("单票决策")
+    st.caption("快速查看一只股票的最终操作、模型概率、买卖点和验证信息；不会覆盖全市场预测结果。")
+
+    holding_options = [f"{code} {name}" for code, name in fixed_holding_name_map().items()]
+    selected = st.selectbox("固定持仓快捷选择", holding_options, index=0)
+    manual_code = st.text_input("股票代码", value=selected.split()[0] if selected else "002466")
+
+    if st.button("生成单票决策", key="generate_single_stock_decision", width="stretch"):
+        run_single_stock_and_refresh(manual_code)
+
+    if single_stock_decision_df.empty:
+        st.info("暂无单票决策，请输入股票代码后生成。")
+    else:
+        show_df = single_stock_decision_df.rename(columns={
+            "stock_code": "股票代码",
+            "stock_name": "股票名称",
+            "is_fixed_holding": "固定持仓",
+            "final_action": "最终操作",
+            "fusion_score": "融合评分",
+            "decision_reason": "操作解释",
+            "rule_grade": "规则等级",
+            "rule_score": "规则评分",
+            "next_day_up_probability": "次日上涨概率",
+            "hit_1pct_probability": "达到1%概率",
+            "hit_2pct_probability": "达到2%概率",
+            "stop_2pct_probability": "止损概率",
+            "buy_status": "买点状态",
+            "buy_range": "买点区间",
+            "sell_signal": "卖点信号",
+            "sell_reason": "卖点理由",
+        })
+        show_table(
+            "单票核心结论",
+            keep_columns(
+                show_df,
+                [
+                    "股票代码",
+                    "股票名称",
+                    "固定持仓",
+                    "最终操作",
+                    "融合评分",
+                    "规则等级",
+                    "次日上涨概率",
+                    "达到1%概率",
+                    "达到2%概率",
+                    "止损概率",
+                    "买点状态",
+                    "买点区间",
+                    "卖点信号",
+                    "卖点理由",
+                    "操作解释",
+                ],
+            ),
+        )
+
+    if single_stock_decision_md:
+        with st.expander("展开单票决策报告", expanded=False):
+            st.markdown(single_stock_decision_md)
+
+
+tab_plan, tab_holdings, tab_single_stock, tab_trade_records, tab_lunch, tab_model_train, tab_model_predict = st.tabs([
     "明日计划",
     "固定持仓",
+    "单票决策",
     "交易记录",
     "午盘验证",
     "模型训练",
@@ -1459,6 +1545,10 @@ with tab_holdings:
     )
     st.divider()
     render_sell_signal_panel()
+
+
+with tab_single_stock:
+    render_single_stock_panel()
 
 
 with tab_trade_records:
