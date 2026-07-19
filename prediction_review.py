@@ -48,6 +48,18 @@ def ensure_review_tables(conn: sqlite3.Connection) -> None:
             hit_1pct_after_touch INTEGER,
             hit_2pct_after_touch INTEGER,
             stop_2pct_after_touch INTEGER,
+            touch_buy_range INTEGER,
+            first_event TEXT,
+            next_day_high_pct REAL,
+            next_day_low_pct REAL,
+            realized_path_type TEXT,
+            execution_quality TEXT,
+            planned_low_pct REAL,
+            planned_high_pct REAL,
+            range_coverage_rate REAL,
+            range_overlap_rate REAL,
+            buy_range_executable INTEGER,
+            intraday_path_label TEXT,
             direction_hit INTEGER,
             hit_1pct_bucket TEXT,
             hit_2pct_bucket TEXT,
@@ -93,9 +105,15 @@ def read_labels(db_path: Path = DATABASE_FILE) -> pd.DataFrame:
             f.market_regime,
             f.sector_name,
             l.direction_up_close,
+            l.touch_buy_range,
             l.hit_1pct_after_touch,
             l.hit_2pct_after_touch,
             l.stop_2pct_after_touch
+            ,l.first_event,
+            l.next_day_high_pct,
+            l.next_day_low_pct,
+            l.realized_path_type,
+            l.execution_quality
         FROM dataset_samples s
         LEFT JOIN feature_snapshot f ON s.sample_id = f.sample_id
         LEFT JOIN label_snapshot l ON s.sample_id = l.sample_id
@@ -118,6 +136,81 @@ def probability_bucket(value: Any) -> str:
     if probability < 0.8:
         return "60-80%"
     return "80-100%"
+
+
+def planned_high_pct(row: pd.Series) -> float:
+    p2 = safe_float(row.get("hit_2pct_probability", row.get("calibrated_hit_2pct_probability", 0)), 0)
+    p1 = safe_float(row.get("hit_1pct_probability", row.get("calibrated_hit_1pct_probability", 0)), 0)
+    if p2 >= 0.5:
+        return 2.0
+    if p1 >= 0.5:
+        return 1.0
+    return 0.0
+
+
+def classify_intraday_path(row: pd.Series) -> str:
+    realized = str(row.get("realized_path_type", "")).strip()
+    if realized and realized.lower() not in ["nan", "none", "null"]:
+        return realized
+
+    first_event = str(row.get("first_event", "")).strip()
+    if first_event in ["hit_2pct", "hit_1pct"]:
+        return "先涨达标"
+    if first_event == "stop_2pct":
+        return "先止损"
+
+    touched = safe_float(row.get("touch_buy_range", 0), 0)
+    high_pct = safe_float(row.get("next_day_high_pct", 0), 0)
+    low_pct = safe_float(row.get("next_day_low_pct", 0), 0)
+
+    if touched <= 0:
+        return "未触达低吸"
+    if high_pct >= 2 and low_pct <= -2:
+        return "宽幅震荡"
+    if high_pct >= 1:
+        return "触达后上冲"
+    if low_pct <= -2:
+        return "触达后走弱"
+    return "触达后震荡"
+
+
+def range_overlap(actual_low: float, actual_high: float, planned_low: float, planned_high: float) -> tuple[float, float]:
+    if actual_high < actual_low:
+        actual_low, actual_high = actual_high, actual_low
+    if planned_high < planned_low:
+        planned_low, planned_high = planned_high, planned_low
+
+    actual_width = max(actual_high - actual_low, 0.0001)
+    union_width = max(max(actual_high, planned_high) - min(actual_low, planned_low), 0.0001)
+    overlap = max(0.0, min(actual_high, planned_high) - max(actual_low, planned_low))
+    return round(overlap / actual_width, 6), round(overlap / union_width, 6)
+
+
+def add_path_and_range_review(review: pd.DataFrame) -> pd.DataFrame:
+    if review.empty:
+        return review
+
+    result = review.copy()
+    result["planned_low_pct"] = -2.0
+    result["planned_high_pct"] = result.apply(planned_high_pct, axis=1)
+    result["buy_range_executable"] = pd.to_numeric(result.get("touch_buy_range", 0), errors="coerce").fillna(0).astype(int)
+    result["intraday_path_label"] = result.apply(classify_intraday_path, axis=1)
+
+    coverage = []
+    overlap = []
+    for _, row in result.iterrows():
+        coverage_rate, overlap_rate = range_overlap(
+            safe_float(row.get("next_day_low_pct", 0), 0),
+            safe_float(row.get("next_day_high_pct", 0), 0),
+            safe_float(row.get("planned_low_pct", -2), -2),
+            safe_float(row.get("planned_high_pct", 0), 0),
+        )
+        coverage.append(coverage_rate)
+        overlap.append(overlap_rate)
+
+    result["range_coverage_rate"] = coverage
+    result["range_overlap_rate"] = overlap
+    return result
 
 
 def build_review_frame(
@@ -188,9 +281,12 @@ def build_review_frame(
         "calibrated_hit_2pct_probability",
         "calibrated_stop_2pct_probability",
         "direction_up_close",
+        "touch_buy_range",
         "hit_1pct_after_touch",
         "hit_2pct_after_touch",
         "stop_2pct_after_touch",
+        "next_day_high_pct",
+        "next_day_low_pct",
     ]:
         if col in review.columns:
             review[col] = pd.to_numeric(review[col], errors="coerce")
@@ -204,6 +300,7 @@ def build_review_frame(
     review["hit_1pct_bucket"] = review["hit_1pct_probability"].apply(probability_bucket)
     review["hit_2pct_bucket"] = review["hit_2pct_probability"].apply(probability_bucket)
     review["stop_2pct_bucket"] = review["stop_2pct_probability"].apply(probability_bucket)
+    review = add_path_and_range_review(review)
     review["direction_model_version"] = review.get("direction_model_version", "").fillna(DIRECTION_MODEL_VERSION)
     review["profit_model_version"] = review.get("profit_model_version", "").fillna(PROFIT_MODEL_VERSION)
     review["calibration_model_version"] = review.get("calibration_model_version", "").fillna(CALIBRATION_MODEL_VERSION)
@@ -231,6 +328,18 @@ def build_review_frame(
         "hit_1pct_after_touch",
         "hit_2pct_after_touch",
         "stop_2pct_after_touch",
+        "touch_buy_range",
+        "first_event",
+        "next_day_high_pct",
+        "next_day_low_pct",
+        "realized_path_type",
+        "execution_quality",
+        "planned_low_pct",
+        "planned_high_pct",
+        "range_coverage_rate",
+        "range_overlap_rate",
+        "buy_range_executable",
+        "intraday_path_label",
         "direction_hit",
         "hit_1pct_bucket",
         "hit_2pct_bucket",
@@ -247,6 +356,17 @@ def mean_binary(df: pd.DataFrame, label_col: str) -> float | None:
         return None
 
     values = pd.to_numeric(df[label_col], errors="coerce").dropna()
+    if values.empty:
+        return None
+
+    return round(float(values.mean()), 6)
+
+
+def mean_numeric(df: pd.DataFrame, column: str) -> float | None:
+    if df.empty or column not in df.columns:
+        return None
+
+    values = pd.to_numeric(df[column], errors="coerce").dropna()
     if values.empty:
         return None
 
@@ -291,6 +411,33 @@ def build_scorecard(review_df: pd.DataFrame) -> pd.DataFrame:
         "all",
         len(review_df),
         mean_binary(review_df, "direction_hit"),
+    )
+    append_score(
+        rows,
+        MODEL_VERSION,
+        "range_coverage_rate",
+        "all",
+        "all",
+        len(review_df),
+        mean_numeric(review_df, "range_coverage_rate"),
+    )
+    append_score(
+        rows,
+        MODEL_VERSION,
+        "range_overlap_rate",
+        "all",
+        "all",
+        len(review_df),
+        mean_numeric(review_df, "range_overlap_rate"),
+    )
+    append_score(
+        rows,
+        MODEL_VERSION,
+        "buy_range_executable_rate",
+        "all",
+        "all",
+        len(review_df),
+        mean_binary(review_df, "buy_range_executable"),
     )
 
     for probability_col, label_col, version, metric_prefix in [
@@ -353,6 +500,18 @@ def build_scorecard(review_df: pd.DataFrame) -> pd.DataFrame:
                 mean_binary(group, label_col),
             )
 
+    if "intraday_path_label" in review_df.columns:
+        for path_label, group in review_df.groupby("intraday_path_label", dropna=False):
+            append_score(
+                rows,
+                MODEL_VERSION,
+                "intraday_path_distribution",
+                "path",
+                str(path_label),
+                len(group),
+                round(len(group) / max(len(review_df), 1), 6),
+            )
+
     return pd.DataFrame(rows)
 
 
@@ -372,6 +531,9 @@ def write_review_report(review_df: pd.DataFrame, scorecard_df: pd.DataFrame) -> 
         f"- +1% 实际发生率：{rate_text(mean_binary(review_df, 'hit_1pct_after_touch'))}",
         f"- +2% 实际发生率：{rate_text(mean_binary(review_df, 'hit_2pct_after_touch'))}",
         f"- 止损实际发生率：{rate_text(mean_binary(review_df, 'stop_2pct_after_touch'))}",
+        f"- 低吸区间可成交率：{rate_text(mean_binary(review_df, 'buy_range_executable'))}",
+        f"- 平均区间覆盖率：{rate_text(mean_numeric(review_df, 'range_coverage_rate'))}",
+        f"- 平均区间重合度：{rate_text(mean_numeric(review_df, 'range_overlap_rate'))}",
         "",
         "## 二、模型评分",
         "",
@@ -388,10 +550,23 @@ def write_review_report(review_df: pd.DataFrame, scorecard_df: pd.DataFrame) -> 
 
     lines.extend([
         "",
-        "## 三、说明",
+        "## 三、路径标签分布",
+        "",
+        "| 路径标签 | 样本数 | 占比 |",
+        "|---|---:|---:|",
+    ])
+
+    if not review_df.empty and "intraday_path_label" in review_df.columns:
+        for label, group in review_df.groupby("intraday_path_label", dropna=False):
+            lines.append(f"| {label} | {len(group)} | {len(group) / max(len(review_df), 1):.2%} |")
+
+    lines.extend([
+        "",
+        "## 四、说明",
         "",
         "- v2.9 负责回顾和评分，不训练新模型。",
         "- 方向模型用方向命中率评分；概率模型用 Brier Score 和概率桶实际发生率评分。",
+        "- 路径和区间回顾先使用标签表中的 `first_event`、次日高低幅和可成交标记；有分钟事件序列时再升级为精确先后判断。",
         "- 样本少时分行业/分市场指标只做观察，不能作为稳定结论。",
         "- 后续 v3.0 将读取本评分结果，辅助规则评分和模型概率融合。",
     ])

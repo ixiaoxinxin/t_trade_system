@@ -229,6 +229,8 @@ feat: improve intraday path and range review
 - 次日复盘可以说明“先触发收益还是先触发止损”。
 - 回顾报告能看到区间覆盖率和区间重合度。
 - 无分钟数据时明确标记不可判断，不用 OHLC 伪造路径。
+- 当前已实现：`prediction_review.py` 输出 `intraday_path_label`、`planned_low_pct`、`planned_high_pct`、`range_coverage_rate`、`range_overlap_rate`、`buy_range_executable`。
+- 当前已实现：`output/prediction_review_v2.9.md` 增加低吸区间可成交率、平均区间覆盖率、平均区间重合度和路径标签分布。
 
 ### Commit 5：封板体验与质量门禁
 

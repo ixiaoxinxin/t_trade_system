@@ -115,6 +115,8 @@ v3.0 封板目标不是继续堆模型，而是把 v2.6-v2.9 已完成的方向�
   - 计划区间覆盖率。
   - 真实区间重合度。
   - 低吸区间可成交标记。
+- 已实现：预测回顾明细新增路径标签、计划区间、区间覆盖率、区间重合度和低吸可成交标记。
+- 已实现：模型评分卡新增 `range_coverage_rate`、`range_overlap_rate`、`buy_range_executable_rate`、`intraday_path_distribution`。
 - v2.9 评分卡新增路径和区间评分。
 
 ### 验收标准
