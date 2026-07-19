@@ -40,6 +40,16 @@ API_USAGE_COLUMNS = [
     "created_at",
 ]
 
+PROVIDER_STATUS_COLUMNS = [
+    "provider",
+    "model",
+    "api_key_env",
+    "has_api_key",
+    "base_url",
+    "status",
+    "checked_at",
+]
+
 
 def usage_row(
     *,
@@ -77,6 +87,47 @@ def estimate_cost(
     output_price = float(provider_config.get("output_price_cny_per_million", 0) or 0)
 
     return input_tokens / 1_000_000 * input_price + output_tokens / 1_000_000 * output_price
+
+
+def build_provider_status_table(config: dict) -> pd.DataFrame:
+    llm_config = config.get("llm_labeling", {})
+    provider_priority = llm_config.get("provider_priority", [])
+    providers = llm_config.get("providers", {})
+    enabled = bool(llm_config.get("enabled", False))
+    checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows = []
+
+    for provider_name in provider_priority:
+        provider_config = providers.get(provider_name, {})
+        api_key_env = str(provider_config.get("api_key_env", "")).strip()
+        base_url = str(provider_config.get("base_url", "")).strip()
+        model = str(provider_config.get("model", "")).strip()
+        has_api_key = bool(api_key_env and os.environ.get(api_key_env, "").strip())
+
+        if not enabled:
+            status = "disabled"
+        elif not api_key_env:
+            status = "missing_api_key_env_name"
+        elif not has_api_key:
+            status = "missing_api_key"
+        elif not base_url:
+            status = "missing_base_url"
+        elif not model:
+            status = "missing_model"
+        else:
+            status = "ready"
+
+        rows.append({
+            "provider": str(provider_name),
+            "model": model,
+            "api_key_env": api_key_env,
+            "has_api_key": int(has_api_key),
+            "base_url": base_url,
+            "status": status,
+            "checked_at": checked_at,
+        })
+
+    return pd.DataFrame(rows, columns=PROVIDER_STATUS_COLUMNS)
 
 
 def build_prompt(sample: dict, label: dict) -> list[dict]:
@@ -196,6 +247,7 @@ def build_llm_tables(
     providers = llm_config.get("providers", {})
     timeout_seconds = int(llm_config.get("request_timeout_seconds", 20) or 20)
     max_daily_cost = float(llm_config.get("max_daily_cost_cny", 20) or 20)
+    sample_limit = int(llm_config.get("sample_limit", 20) or 20)
     label_by_sample_id = {
         str(row.get("sample_id", "")): row for _, row in labels_df.iterrows()
     }
@@ -212,7 +264,16 @@ def build_llm_tables(
         ))
         return pd.DataFrame(columns=LLM_LABEL_COLUMNS), pd.DataFrame(usage_rows, columns=API_USAGE_COLUMNS)
 
-    for _, sample_row in samples_df.iterrows():
+    for sample_index, (_, sample_row) in enumerate(samples_df.iterrows()):
+        if sample_index >= sample_limit:
+            usage_rows.append(usage_row(
+                provider="",
+                model="",
+                prompt_version=prompt_version,
+                status="skipped_sample_limit",
+            ))
+            break
+
         sample, label = build_sample_summary(
             sample_row,
             label_by_sample_id.get(str(sample_row.get("sample_id", ""))),

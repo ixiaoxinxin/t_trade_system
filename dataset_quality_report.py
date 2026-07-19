@@ -25,6 +25,33 @@ REQUIRED_LABEL_FIELDS = [
     "execution_quality",
 ]
 
+REQUIRED_FEATURE_FIELDS = [
+    "ret_1d",
+    "ret_3d",
+    "ret_5d",
+    "ret_20d",
+    "ma5_gap",
+    "ma10_gap",
+    "ma20_gap",
+    "atr_14",
+    "hist_vol_20",
+    "amount",
+    "avg_amount_5d",
+    "volume_ratio",
+    "body_pct",
+    "upper_shadow_pct",
+    "lower_shadow_pct",
+    "gap_open_pct",
+    "open_strength",
+    "first_15m_return",
+    "first_15m_drawdown",
+    "vwap_gap",
+    "sector_rank_1d",
+    "sector_rank_5d",
+    "sector_breadth",
+    "sector_leader_pct",
+]
+
 
 def read_table(conn: sqlite3.Connection, table_name: str) -> pd.DataFrame:
     row = conn.execute(
@@ -43,7 +70,24 @@ def missing_count(df: pd.DataFrame, field: str) -> int:
         return len(df)
 
     values = df[field]
-    return int(values.isna().sum() + values.astype(str).str.strip().isin(["", "None", "nan"]).sum())
+    missing_mask = values.isna() | values.astype(str).str.strip().isin(["", "None", "nan"])
+    return int(missing_mask.sum())
+
+
+def field_coverage(df: pd.DataFrame, fields: list[str]) -> dict[str, dict[str, Any]]:
+    total = len(df)
+    result = {}
+
+    for field in fields:
+        missing = missing_count(df, field)
+        present = max(0, total - missing)
+        result[field] = {
+            "present": present,
+            "missing": missing,
+            "coverage_pct": round(present / total * 100, 2) if total else 0.0,
+        }
+
+    return result
 
 
 def build_label_review_queue(label_df: pd.DataFrame, llm_df: pd.DataFrame) -> pd.DataFrame:
@@ -139,12 +183,14 @@ def build_quality_metrics(
         "prediction_log",
         "trade_records",
         "llm_label_snapshot",
+        "llm_provider_status",
         "api_usage_log",
         "label_review_queue",
     ]
     tables = {table_name: read_table(conn, table_name) for table_name in table_names}
     label_df = tables["label_snapshot"]
     llm_df = tables["llm_label_snapshot"]
+    provider_status_df = tables["llm_provider_status"]
     usage_df = tables["api_usage_log"]
     queue_df = build_label_review_queue(label_df, llm_df)
 
@@ -155,6 +201,7 @@ def build_quality_metrics(
     matched_label_sample_count = len(sample_ids & labeled_sample_ids)
     missing_label_sample_count = len(sample_ids - labeled_sample_ids)
     required_missing = {field: missing_count(label_df, field) for field in REQUIRED_LABEL_FIELDS}
+    feature_coverage = field_coverage(tables["feature_snapshot"], REQUIRED_FEATURE_FIELDS)
     llm_cost = float(pd.to_numeric(usage_df.get("cost_estimate_cny", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 
     metrics = {
@@ -165,6 +212,8 @@ def build_quality_metrics(
         "label_coverage_pct": round(matched_label_sample_count / total_samples * 100, 2) if total_samples else 0.0,
         "missing_label_sample_count": missing_label_sample_count,
         "required_label_missing": required_missing,
+        "feature_coverage": feature_coverage,
+        "llm_provider_status": provider_status_df.to_dict("records") if not provider_status_df.empty else [],
         "review_queue_count": len(queue_df),
         "llm_enabled": llm_enabled,
         "llm_cost_estimate_cny": round(llm_cost, 6),
@@ -229,23 +278,51 @@ def write_quality_report(
 
     lines.extend([
         "",
-        "## 四、人工复核队列",
+        "## 四、特征覆盖率",
+        "",
+        "| 字段 | 有值数 | 缺失数 | 覆盖率 |",
+        "|---|---:|---:|---:|",
+    ])
+
+    for field, coverage in metrics["feature_coverage"].items():
+        lines.append(
+            f"| `{field}` | {coverage['present']} | {coverage['missing']} | {coverage['coverage_pct']}% |"
+        )
+
+    lines.extend([
+        "",
+        "## 五、人工复核队列",
         "",
         f"- 待复核数量：{metrics['review_queue_count']}",
         f"- 队列表：`label_review_queue`",
         f"- 队列报告：`{LABEL_REVIEW_QUEUE_FILE}`",
         "",
-        "## 五、LLM 辅助标签",
+        "## 六、LLM 辅助标签",
         "",
         f"- 当前开关：{'开启' if metrics['llm_enabled'] else '关闭'}",
         f"- 估算成本：{metrics['llm_cost_estimate_cny']} CNY",
         "- 未配置或关闭时，不阻断样本、特征、标签、交易记录生成。",
         "",
-        "## 六、时间序列切分",
+        "| 供应商 | 模型 | API Key 环境变量 | 是否已配置 | 状态 |",
+        "|---|---|---|---:|---|",
+    ])
+
+    if metrics["llm_provider_status"]:
+        for row in metrics["llm_provider_status"]:
+            lines.append(
+                f"| {row.get('provider', '')} | `{row.get('model', '')}` | "
+                f"`{row.get('api_key_env', '')}` | {row.get('has_api_key', 0)} | {row.get('status', '')} |"
+            )
+    else:
+        lines.append("| - | - | - | 0 | 未生成 provider 状态，请先运行 `python main.py dataset` |")
+
+    lines.extend([
+        "",
+        "## 七、时间序列切分",
         "",
         f"- 切分文件：`{split_path}`",
         "",
-        "## 七、导出文件",
+        "## 八、导出文件",
         "",
     ])
 

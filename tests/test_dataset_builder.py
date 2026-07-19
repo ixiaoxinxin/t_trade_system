@@ -9,9 +9,10 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from dataset_builder import sample_id, yes_no_to_int
+import dataset_builder
+from dataset_builder import build_daily_cache_features, sample_id, yes_no_to_int
 from dataset_splitter import build_time_series_split
-from llm_labeler import estimate_cost
+from llm_labeler import build_provider_status_table, estimate_cost
 
 
 class DatasetBuilderTest(unittest.TestCase):
@@ -56,6 +57,60 @@ class DatasetBuilderTest(unittest.TestCase):
         )
 
         self.assertEqual(cost, 0.011)
+
+    def test_daily_cache_features_cover_core_fields(self):
+        with TemporaryDirectory() as temp_dir:
+            original_cache_dir = dataset_builder.CACHE_DAILY_DIR
+            dataset_builder.CACHE_DAILY_DIR = Path(temp_dir)
+
+            try:
+                rows = []
+
+                for i in range(25):
+                    close = 10 + i * 0.1
+                    rows.append({
+                        "日期": f"2026-06-{i + 1:02d}",
+                        "开盘": close - 0.05,
+                        "收盘": close,
+                        "最高": close + 0.2,
+                        "最低": close - 0.2,
+                        "成交量": 1000 + i * 10,
+                        "成交额": (1000 + i * 10) * close,
+                    })
+
+                pd.DataFrame(rows).to_csv(Path(temp_dir) / "002378.csv", index=False)
+                features = build_daily_cache_features("2378", "2026-06-25")
+            finally:
+                dataset_builder.CACHE_DAILY_DIR = original_cache_dir
+
+        self.assertIsNotNone(features["ret_20d"])
+        self.assertIsNotNone(features["ma20_gap"])
+        self.assertIsNotNone(features["atr_14"])
+        self.assertIsNotNone(features["hist_vol_20"])
+        self.assertIsNotNone(features["body_pct"])
+        self.assertIsNotNone(features["volume_ratio"])
+
+    def test_provider_status_checks_key_presence_without_exposing_value(self):
+        config = {
+            "llm_labeling": {
+                "enabled": True,
+                "provider_priority": ["deepseek"],
+                "providers": {
+                    "deepseek": {
+                        "api_key_env": "DEEPSEEK_API_KEY_FOR_TEST",
+                        "base_url": "https://api.deepseek.com/chat/completions",
+                        "model": "deepseek-chat",
+                    },
+                },
+            },
+        }
+
+        status_df = build_provider_status_table(config)
+
+        self.assertEqual(status_df.iloc[0]["provider"], "deepseek")
+        self.assertEqual(status_df.iloc[0]["has_api_key"], 0)
+        self.assertEqual(status_df.iloc[0]["status"], "missing_api_key")
+        self.assertNotIn("sk-", status_df.to_string())
 
 
 if __name__ == "__main__":

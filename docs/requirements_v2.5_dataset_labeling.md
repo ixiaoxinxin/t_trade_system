@@ -66,7 +66,7 @@ dataset:
 本次 2.1 commit 将 v2.5 的数据地基先落到可运行状态：
 
 - 已建立 SQLite 样本库：`data/dataset/trade_dataset.sqlite3`。
-- 已在 SQLite 中建立 7 张表：`dataset_samples`、`feature_snapshot`、`label_snapshot`、`prediction_log`、`trade_records`、`llm_label_snapshot`、`api_usage_log`。
+- 已在 SQLite 中建立 9 张表：`dataset_samples`、`feature_snapshot`、`label_snapshot`、`prediction_log`、`trade_records`、`llm_label_snapshot`、`llm_provider_status`、`api_usage_log`、`label_review_queue`。
 - 已新增 `dataset_builder.py`，负责从交易池、次日验证、市场环境、运行记录和真实交易记录生成数据集。
 - 已新增 `llm_labeler.py`，支持 DeepSeek、豆包、通义千问、智谱等 OpenAI-compatible API 配置；默认关闭，缺少 API Key 时自动跳过，不阻断数据集生成。
 - 已新增 `sqlite_store.py`，负责把本地页面输出、Markdown/JSON 报告、日线缓存、分钟缓存迁移到 SQLite。
@@ -77,9 +77,12 @@ dataset:
 - 已新增 `python main.py migrate-db` 迁移入口。
 - 已新增 `python main.py labels`、`python main.py split`、`python main.py quality` 独立入口。
 - 已新增 Streamlit 页面「生成数据集」「迁移数据库」按钮和「数据集」Tab。
+- 已补齐本地日线缓存特征计算：收益率、MA 动量、ATR、历史波动率、成交额、量比、K线实体、上下影线、跳空。
+- 已补齐分钟缓存特征计算：有 `cache/minute/*_1m.csv` 时计算开盘强度、前15分钟收益/回撤、VWAP 偏离；无缓存时留空并在质量报告中暴露覆盖率。
+- 已新增 `llm_provider_status`，只记录供应商、模型、API Key 环境变量名、是否已配置和状态，不保存任何真实 Key。
 - 页面读取优先走 SQLite；CSV/Markdown/JSON 只作为兼容导入和过渡层。
 - 已新增时间序列切分文件：`data/dataset/splits/latest.json`，当前先按预测日期 70% / 15% / 15% 切分；样本量扩大后升级为 2年 / 3个月 / 1个月滚动窗口。
-- 已新增质量报告：`output/dataset_quality_report.md`。
+- 已新增质量报告：`output/dataset_quality_report.md`，包含样本/标签覆盖率、特征覆盖率、人工复核队列、LLM provider 配置状态和成本估算。
 
 ### 2.5 SQLite 本地数据迁移范围
 
@@ -141,6 +144,20 @@ dataset:
 | 市场 | `market_regime`、`market_risk_level`、`market_atr`、`panic_score` |
 | 板块 | `sector_name`、`sector_status`、`sector_rank_1d`、`sector_rank_5d`、`sector_breadth`、`sector_leader_pct` |
 | 规则 | `candidate_score`、`tail_score`、`final_score`、`overnight_grade`、`risk_level` |
+
+当前实现口径：
+
+- 日线特征从 `cache/daily/{stock_code}.csv` 计算，只使用 `feature_date` 当日及以前的数据。
+- `ret_1d/3d/5d/20d`：当前收盘价相对 N 个交易日前收盘价的涨跌幅。
+- `ma5_gap/ma10_gap/ma20_gap`：当前收盘价相对对应均线的偏离率。
+- `ma5_slope/ma10_slope`：当前均线相对上一交易日同周期均线的变化率。
+- `atr_14`：近 14 日 True Range 均值 / 当前收盘价。
+- `hist_vol_20`：近 20 日日收益率标准差。
+- `range_5d`：近 5 日最高价 / 最低价 - 1。
+- `amount/avg_amount_5d/volume_ratio`：来自日线缓存的成交额、近 5 日均成交额、当日成交量相对前 5 日均量。
+- `body_pct/upper_shadow_pct/lower_shadow_pct/gap_open_pct`：基于预测日 OHLC 与上一交易日收盘价计算。
+- 分钟特征从 `cache/minute/{stock_code}_1m.csv` 计算；没有分钟缓存时不造数，字段留空。
+- `turnover_rate`、`market_atr`、`panic_score` 暂不伪造；需要可靠流通股本数据和指数日线缓存后再启用。
 
 ### 3.3 标签表 `label_snapshot`
 
@@ -343,6 +360,7 @@ llm_labeling:
     - qwen
     - glm
   max_daily_cost_cny: 20
+  sample_limit: 20
   min_confidence: 0.70
   prompt_version: v2.5-labeling-001
   request_timeout_seconds: 20
@@ -379,6 +397,35 @@ llm_labeling:
 - 未配置 API Key 时，数据集生成仍可运行，只跳过大模型辅助标签。
 - 每次调用都记录 token、费用估算、模型和 prompt 版本。
 - 达到日预算上限时自动停止大模型调用。
+- 默认 `sample_limit: 20`，用于先跑小样本验通链路，避免误开后批量消耗额度。
+- `llm_provider_status` 只记录 Key 是否存在，不记录 Key 内容。
+
+### 6.1 现在接入大模型需要用户提供什么
+
+最少需要提供以下信息：
+
+| 项目 | 必需 | 说明 |
+|---|---|---|
+| 选择供应商 | 是 | 建议先选 DeepSeek、豆包、通义三选一，默认优先 DeepSeek |
+| API Key | 是 | 放到环境变量，例如 `DEEPSEEK_API_KEY`、`DOUBAO_API_KEY`、`DASHSCOPE_API_KEY`、`ZHIPUAI_API_KEY` |
+| 是否开启 | 是 | 把本地 `config.yaml` 的 `llm_labeling.enabled` 改为 `true` |
+| 成本上限 | 建议 | `max_daily_cost_cny`，建议首次设置 5-20 元 |
+| 小样本数量 | 建议 | `sample_limit`，建议首次设置 3-20 条 |
+| 模型名和 Base URL | 可选 | 使用默认配置即可；如供应商更新模型名，再在本地配置覆盖 |
+
+本地启动方式示例：
+
+```bash
+export DEEPSEEK_API_KEY="你的 key"
+python main.py dataset
+```
+
+验收方式：
+
+- `output/dataset_quality_report.md` 中 `LLM 辅助标签` 区域能看到 provider 是否 ready。
+- SQLite 表 `llm_provider_status` 能看到每个供应商缺什么配置。
+- SQLite 表 `api_usage_log` 能看到调用状态、token 和估算成本。
+- SQLite 表 `llm_label_snapshot` 有结构化辅助标签时，说明链路已跑通。
 
 ## 7. 开发计划
 
@@ -442,8 +489,9 @@ llm_labeling:
 - 新增 `prompts/labeling_v2.5.md`。
 - 支持 OpenAI-compatible API 客户端。
 - 支持 DeepSeek、豆包、通义、智谱的 provider 配置。
-- 输出 SQLite 表 `llm_label_snapshot` 和 `label_review_queue`。
+- 输出 SQLite 表 `llm_label_snapshot`、`llm_provider_status` 和 `label_review_queue`。
 - 输出 SQLite 表 `api_usage_log`，记录供应商、模型、token 和估算成本。
+- 增加 `sample_limit` 小样本上限，首次接入只跑少量样本。
 
 验收：
 
