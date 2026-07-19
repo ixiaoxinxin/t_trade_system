@@ -144,6 +144,8 @@ v3.0 封板目标不是继续堆模型，而是把 v2.6-v2.9 已完成的方向�
 - `python main.py decision-fusion` 能单独运行。
 - `python -m unittest discover -s tests` 通过。
 - 页面能完成完整工作流。
+- 已实现：新增 `docs/v3.0_acceptance_checklist.md` 和 Obsidian 验收清单。
+- 已验证：全量单元测试 33 个通过。
 
 ## 8. 封板后再考虑
 

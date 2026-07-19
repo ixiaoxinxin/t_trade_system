@@ -621,6 +621,7 @@ def render_fixed_holding_snapshot(
 st.title("A股隔日T选股系统 v2.0")
 
 st.caption("工作流版：今日能不能做 → 明天看哪几只 → 实盘怎么处理 → 结果沉淀到数据集")
+st.info("v3.0 封板主线：先看最终操作，再看单票依据；模型概率只辅助排序和风控，不替代规则。")
 
 st.divider()
 

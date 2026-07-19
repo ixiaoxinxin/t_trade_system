@@ -256,6 +256,8 @@ chore: seal v3.0 workflow and quality gates
 - `python main.py decision-fusion`、`python main.py prediction-review` 通过。
 - 页面能完整完成：生成计划 -> 看最终操作 -> 记录交易 -> 次日复盘 -> 保存训练数据 -> 模型评分。
 - 文档能指导用户独立验收 v3.0。
+- 当前已实现：README、日常工作流、Obsidian 工作流和 v3.0 验收清单已更新。
+- 当前已验证：`python -m unittest discover -s tests` 通过 33 个测试。
 
 ## 6. 推荐执行顺序
 

@@ -64,6 +64,12 @@ python main.py holdings-refresh
 python main.py model-train
 python main.py model-predict
 python main.py model-predict --stock-code 002466
+python main.py probability-train
+python main.py probability-predict
+python main.py calibrate-explain
+python main.py prediction-review
+python main.py decision-fusion
+python main.py single-stock --stock-code 002466
 python main.py migrate-db
 python main.py labels
 python main.py split
@@ -84,7 +90,7 @@ output/run_manifest.json
 streamlit run app.py
 ```
 
-前端按真实工作流分为「明日计划」「固定持仓」「交易记录」「午盘验证」「模型训练」「模型预测」。日常入口是生成明日计划、更新卖点信号、午盘验证、次日复盘和保存训练数据。v2.6 起，固定持仓、交易记录、午盘验证、模型训练、模型预测拆成独立 Tab，减少跨区查找。
+前端按真实工作流分为「明日计划」「固定持仓」「单票决策」「交易记录」「午盘验证」「模型训练」「模型预测」。日常入口是生成明日计划、更新卖点信号、午盘验证、次日复盘和保存训练数据。v3.0 起，优先看最终操作，再进入单票决策看依据。
 
 ## 主要输出
 
@@ -110,6 +116,15 @@ streamlit run app.py
 - `output/model_evaluation_v2.6.md`
 - `output/model_predictions_v2.6.csv`
 - `output/label_review_queue.md`
+- `output/profit_probabilities_v2.7.csv`
+- `output/calibrated_probabilities_v2.8.csv`
+- `output/model_explanations_v2.8.csv`
+- `output/prediction_review_v2.9.csv`
+- `output/model_scorecard_v2.9.csv`
+- `output/final_decision_v3.0.csv`
+- `output/final_decision_v3.0.md`
+- `output/single_stock_decision.csv`
+- `output/single_stock_decision.md`
 
 v2.5 起，SQLite 是页面和训练数据的主存储。旧 CSV/Markdown/JSON 文件只作为兼容导入或过渡导出，页面读取优先走 `data/dataset/trade_dataset.sqlite3`。
 
@@ -145,6 +160,26 @@ python main.py prediction-review
 ```
 
 输出预测回顾、模型评分卡和回顾报告：`output/prediction_review_v2.9.csv`、`output/model_scorecard_v2.9.csv`、`output/prediction_review_v2.9.md`。
+
+v3.0 封板前已增强路径和区间回顾：预测回顾会输出 `intraday_path_label`、`range_coverage_rate`、`range_overlap_rate`、`buy_range_executable`，用于判断计划区间是否覆盖真实走势、低吸区间是否可成交。
+
+## v3.0 融合决策与单票工作台
+
+生成最终操作：
+
+```bash
+python main.py decision-fusion
+```
+
+输出 `output/final_decision_v3.0.csv` 和 `output/final_decision_v3.0.md`。融合层会把规则等级、方向概率、+1%/+2%概率、止损概率、板块状态、市场环境和模型评分合成最终操作。
+
+查看单票：
+
+```bash
+python main.py single-stock --stock-code 002466
+```
+
+输出 `output/single_stock_decision.csv` 和 `output/single_stock_decision.md`。单票工作台只读取现有全量结果，不覆盖全市场预测文件。
 
 ## 常见问题
 
