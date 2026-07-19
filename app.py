@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-A股隔日T选股系统 v2.0 Streamlit 精简版
+A股隔日T选股系统 Streamlit 精简版
 
 升级点：
 1. 页面继续降噪，删除高低点/最高涨幅/最低涨幅等冗余展示
@@ -12,7 +12,7 @@ A股隔日T选股系统 v2.0 Streamlit 精简版
 5. 原始 Markdown 报告默认折叠
 6. 页面按真实交易工作流重组
 7. 人工复盘入口下线，复盘沉淀以真实交易记录为准
-8. v2.6 页面按工作流拆成独立一级 Tab，固定持仓、交易记录、午盘、模型训练、模型预测分开验收
+8. 页面按工作流拆成独立一级 Tab，固定持仓、交易记录、午盘、模型训练、模型预测分开验收
 """
 
 from pathlib import Path
@@ -77,7 +77,7 @@ FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 
 
 st.set_page_config(
-    page_title="A股隔日T选股系统 v2.0",
+    page_title="A股隔日T选股系统",
     layout="wide"
 )
 
@@ -618,10 +618,10 @@ def render_fixed_holding_snapshot(
 # 页面主体
 # =========================
 
-st.title("A股隔日T选股系统 v2.0")
+st.title("A股隔日T选股系统")
 
 st.caption("工作流版：今日能不能做 → 明天看哪几只 → 实盘怎么处理 → 结果沉淀到数据集")
-st.info("v3.0 封板主线：先看最终操作，再看单票依据；模型概率只辅助排序和风控，不替代规则。")
+st.info("使用主线：先看最终操作，再看单票依据；模型概率只辅助排序和风控，不替代规则。")
 
 st.divider()
 
@@ -923,7 +923,7 @@ def render_trade_plan_panel() -> None:
             "risk_reward_ratio": "风险收益比",
         })
         show_table(
-            "v3.0 最终操作",
+            "最终操作",
             keep_columns(
                 final_show_df,
                 [
@@ -943,7 +943,7 @@ def render_trade_plan_panel() -> None:
             ).head(12),
         )
     else:
-        st.info("暂无 v3.0 最终决策，请先运行模型预测后点击【刷新最终决策】。")
+        st.info("暂无最终决策，请先运行模型预测后点击【刷新最终决策】。")
 
     if final_decision_md:
         with st.expander("展开最终决策报告", expanded=False):
@@ -1178,7 +1178,10 @@ def render_dataset_metrics(
 
 def render_model_training_panel() -> None:
     st.subheader("模型训练")
-    st.caption("先保存训练数据，再训练 v2.6 方向模型。这里主要看样本量、标签覆盖和模型评估。")
+    st.caption("先保存训练数据，再训练方向模型和收益目标模型。这里主要看样本量、标签覆盖和评估报告。")
+    st.markdown(
+        "操作顺序：保存训练数据 → 训练方向模型 → 训练收益目标概率 → 生成校准与解释 → 生成预测回顾。"
+    )
 
     train_col1, train_col2, train_col3, train_col4 = st.columns(4)
 
@@ -1215,41 +1218,41 @@ def render_model_training_panel() -> None:
     )
 
     if dataset_quality_md:
-        with st.expander("展开数据集质量报告", expanded=True):
+        with st.expander("展开数据集质量报告", expanded=False):
             st.markdown(dataset_quality_md)
     else:
         st.warning("暂无数据集质量报告，请点击【保存训练数据】。")
 
     if model_evaluation_md:
-        with st.expander("展开 v2.6 模型评估报告", expanded=True):
+        with st.expander("展开方向模型评估报告", expanded=False):
             st.markdown(model_evaluation_md)
     else:
-        st.info("暂无 v2.6 模型评估报告，请先点击【训练方向模型】。")
+        st.info("暂无方向模型评估报告，请先点击【训练方向模型】。")
 
     if profit_probability_evaluation_md:
-        with st.expander("展开 v2.7 收益目标概率评估报告", expanded=True):
+        with st.expander("展开收益目标概率评估报告", expanded=False):
             st.markdown(profit_probability_evaluation_md)
     else:
-        st.info("暂无 v2.7 收益目标概率评估报告，请先点击【训练收益目标概率模型】。")
+        st.info("暂无收益目标概率评估报告，请先点击【训练收益目标概率模型】。")
 
     if calibration_report_md:
-        with st.expander("展开 v2.8 概率校准与解释报告", expanded=True):
+        with st.expander("展开概率校准与解释报告", expanded=False):
             st.markdown(calibration_report_md)
     else:
-        st.info("暂无 v2.8 概率校准与解释报告，请先点击【生成校准与解释】。")
+        st.info("暂无概率校准与解释报告，请先点击【生成校准与解释】。")
 
     if prediction_review_report_md:
-        with st.expander("展开 v2.9 预测回顾与模型评分报告", expanded=True):
+        with st.expander("展开预测回顾与模型评分报告", expanded=False):
             st.markdown(prediction_review_report_md)
     else:
-        st.info("暂无 v2.9 预测回顾报告，请先点击【生成预测回顾】。")
+        st.info("暂无预测回顾报告，请先点击【生成预测回顾】。")
 
     show_table("样本主表预览", dataset_samples_df.head(20))
 
 
 def render_model_prediction_panel() -> None:
     st.subheader("模型预测")
-    st.caption("生成候选股票的次日上涨概率和方向置信度，只做辅助排序，不替代规则等级。")
+    st.caption("生成候选股票的上涨概率、收益目标概率和止损概率。这里只做辅助排序，最终操作仍看明日计划和单票决策。")
 
     predict_col1, predict_col2 = st.columns(2)
 
@@ -1288,8 +1291,28 @@ def render_model_prediction_panel() -> None:
         "market_regime": "市场环境",
         "sector_name": "所属板块",
     })
+
+    if not model_show_df.empty and "次日上涨概率" in model_show_df.columns:
+        probability_count = pd.to_numeric(
+            model_show_df["次日上涨概率"],
+            errors="coerce",
+        ).dropna().round(6).nunique()
+        confidence_count = 0
+        if "方向置信度" in model_show_df.columns:
+            confidence_count = pd.to_numeric(
+                model_show_df["方向置信度"],
+                errors="coerce",
+            ).dropna().round(6).nunique()
+
+        if probability_count <= 1 or confidence_count <= 1:
+            st.warning(
+                "当前方向概率或方向置信度基本一致，说明方向模型暂时没有学出个股差异。"
+                "常见原因是样本太少、标签分布单一，或模型回退到整体基准概率。"
+                "这种情况下先把它当作风险提示，最终仍以规则评分、卖点信号和单票决策为准。"
+            )
+
     show_table(
-        "v2.6 次日上涨概率排序",
+        "次日上涨概率排序",
         keep_columns(
             model_show_df,
             [
@@ -1301,7 +1324,6 @@ def render_model_prediction_panel() -> None:
                 "模型方向",
                 "市场环境",
                 "所属板块",
-                "模型版本",
             ],
         ),
     )
@@ -1320,7 +1342,7 @@ def render_model_prediction_panel() -> None:
         "predict_date": "预测日期",
     })
     show_table(
-        "v2.7 收益目标概率排序",
+        "收益目标概率排序",
         keep_columns(
             profit_show_df,
             [
@@ -1334,7 +1356,6 @@ def render_model_prediction_panel() -> None:
                 "2%风险差",
                 "概率收益风险比",
                 "概率信号",
-                "模型版本",
             ],
         ),
     )
@@ -1352,7 +1373,7 @@ def render_model_prediction_panel() -> None:
         "predict_date": "预测日期",
     })
     show_table(
-        "v2.8 校准后概率",
+        "校准后概率",
         keep_columns(
             calibrated_show_df,
             [
@@ -1365,7 +1386,6 @@ def render_model_prediction_panel() -> None:
                 "校准后1%风险差",
                 "校准后2%风险差",
                 "概率信号",
-                "校准版本",
             ],
         ),
     )
@@ -1379,7 +1399,7 @@ def render_model_prediction_panel() -> None:
         "explanation_method": "解释方法",
     })
     show_table(
-        "v2.8 单票多空因素",
+        "单票多空因素",
         keep_columns(
             explanation_show_df,
             [
@@ -1403,17 +1423,15 @@ def render_model_prediction_panel() -> None:
         "created_at": "生成时间",
     })
     show_table(
-        "v2.9 模型评分卡",
+        "模型评分卡",
         keep_columns(
             scorecard_show_df,
             [
-                "模型版本",
                 "指标",
                 "分组类型",
                 "分组",
                 "样本数",
                 "分数",
-                "生成时间",
             ],
         ),
     )

@@ -1,7 +1,5 @@
 # A股隔日T选股系统
 
-当前产品版本：v2.0
-
 本项目是一个本地运行的 A股隔日T选股、交易计划、卖点信号和复盘辅助系统。系统只做规则化辅助分析，不自动下单，不构成投资建议。
 
 ## 安装
@@ -90,7 +88,7 @@ output/run_manifest.json
 streamlit run app.py
 ```
 
-前端按真实工作流分为「明日计划」「固定持仓」「单票决策」「交易记录」「午盘验证」「模型训练」「模型预测」。日常入口是生成明日计划、更新卖点信号、午盘验证、次日复盘和保存训练数据。v3.0 起，优先看最终操作，再进入单票决策看依据。
+前端按真实工作流分为「明日计划」「固定持仓」「单票决策」「交易记录」「午盘验证」「模型训练」「模型预测」。日常入口是生成明日计划、更新卖点信号、午盘验证、次日复盘和保存训练数据。使用时优先看最终操作，再进入单票决策看依据。
 
 ## 主要输出
 
@@ -128,15 +126,17 @@ streamlit run app.py
 
 v2.5 起，SQLite 是页面和训练数据的主存储。旧 CSV/Markdown/JSON 文件只作为兼容导入或过渡导出，页面读取优先走 `data/dataset/trade_dataset.sqlite3`。
 
-## v2.6 方向模型
+## 方向模型
 
-v2.6 使用 LightGBM 训练次日涨跌方向分类模型，主标签为 `direction_up_close`，即次日收盘是否上涨。模型输出次日上涨概率和方向置信度，只用于辅助排序，不自动替代规则等级。
+方向模型使用 LightGBM 训练次日涨跌方向分类模型，主标签为 `direction_up_close`，即次日收盘是否上涨。模型输出次日上涨概率和方向置信度，只用于辅助排序，不自动替代规则等级。
+
+如果所有股票的次日上涨概率或方向置信度都一样，说明当前模型可能处在基准概率状态，通常是样本太少、标签分布单一或特征还不能区分个股。此时应优先看最终操作、规则等级和卖点信号。
 
 固定持仓样本池包含融捷股份、云天化、大为股份、神火股份、天齐锂业；这些股票会在卖点信号、午盘验证和次日复盘中置顶。行情缺失时显示待刷新，不写入有效训练标签。
 
-## v2.7 收益目标概率
+## 收益目标概率
 
-v2.7 新增 +1%、+2%、-2% 止损概率模型：
+收益目标概率模型输出 +1%、+2%、-2% 止损概率：
 
 ```bash
 python main.py probability-train
@@ -145,7 +145,7 @@ python main.py probability-predict
 
 输出文件为 `output/profit_probability_evaluation_v2.7.md` 和 `output/profit_probabilities_v2.7.csv`，SQLite 表为 `profit_probability_training_runs` 和 `profit_probability_predictions`。
 
-## v2.8 概率校准与解释
+## 概率校准与解释
 
 ```bash
 python main.py calibrate-explain
@@ -153,7 +153,7 @@ python main.py calibrate-explain
 
 输出校准报告、校准后概率和单票多空因素：`output/probability_calibration_v2.8.md`、`output/calibrated_probabilities_v2.8.csv`、`output/model_explanations_v2.8.csv`。
 
-## v2.9 预测回顾与模型评分
+## 预测回顾与模型评分
 
 ```bash
 python main.py prediction-review
@@ -161,9 +161,9 @@ python main.py prediction-review
 
 输出预测回顾、模型评分卡和回顾报告：`output/prediction_review_v2.9.csv`、`output/model_scorecard_v2.9.csv`、`output/prediction_review_v2.9.md`。
 
-v3.0 封板前已增强路径和区间回顾：预测回顾会输出 `intraday_path_label`、`range_coverage_rate`、`range_overlap_rate`、`buy_range_executable`，用于判断计划区间是否覆盖真实走势、低吸区间是否可成交。
+当前已增强路径和区间回顾：预测回顾会输出 `intraday_path_label`、`range_coverage_rate`、`range_overlap_rate`、`buy_range_executable`，用于判断计划区间是否覆盖真实走势、低吸区间是否可成交。
 
-## v3.0 融合决策与单票工作台
+## 融合决策与单票工作台
 
 生成最终操作：
 
@@ -193,13 +193,13 @@ python main.py candidates --max-count 5
 
 做小规模验证。
 
-### 为什么不再输出板块/热点标签？
+### 为什么不再输出轻量板块/热点标签？
 
-v2.0 按当前决策去掉轻量板块识别功能，避免基于股票名称的弱规则误导交易计划。后续如需恢复，应接入更可靠的行业/概念映射。
+当前已去掉轻量板块识别功能，避免基于股票名称的弱规则误导交易计划。后续如需恢复，应接入更可靠的行业/概念映射。
 
 ### 为什么次日验证结果更细了？
 
-v2.0 不再只看“次日最高达到 1% 且未触发 -2%”，而是先判断是否触达计划低吸区间，再区分给买点成功、给买点失败、未给买点、风险触发和数据不足。
+当前不再只看“次日最高达到 1% 且未触发 -2%”，而是先判断是否触达计划低吸区间，再区分给买点成功、给买点失败、未给买点、风险触发和数据不足。
 
 ### 数据集为什么用 SQLite？
 
