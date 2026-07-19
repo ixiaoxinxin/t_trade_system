@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,7 +13,7 @@ import pandas as pd
 import dataset_builder
 from dataset_builder import build_daily_cache_features, sample_id, yes_no_to_int
 from dataset_splitter import build_time_series_split
-from llm_labeler import build_provider_status_table, estimate_cost
+from llm_labeler import build_provider_status_table, estimate_cost, load_local_env
 
 
 class DatasetBuilderTest(unittest.TestCase):
@@ -111,6 +112,25 @@ class DatasetBuilderTest(unittest.TestCase):
         self.assertEqual(status_df.iloc[0]["has_api_key"], 0)
         self.assertEqual(status_df.iloc[0]["status"], "missing_api_key")
         self.assertNotIn("sk-", status_df.to_string())
+
+    def test_load_local_env_reads_key_without_overriding_existing_value(self):
+        with TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text(
+                "LOCAL_ENV_TEST_KEY=from_file\nLOCAL_ENV_EXISTING=from_file\n",
+                encoding="utf-8",
+            )
+            os.environ.pop("LOCAL_ENV_TEST_KEY", None)
+            os.environ["LOCAL_ENV_EXISTING"] = "existing"
+
+            try:
+                load_local_env(env_path)
+
+                self.assertEqual(os.environ["LOCAL_ENV_TEST_KEY"], "from_file")
+                self.assertEqual(os.environ["LOCAL_ENV_EXISTING"], "existing")
+            finally:
+                os.environ.pop("LOCAL_ENV_TEST_KEY", None)
+                os.environ.pop("LOCAL_ENV_EXISTING", None)
 
 
 if __name__ == "__main__":

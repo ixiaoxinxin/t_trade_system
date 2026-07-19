@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
+.env
 cache/minute/*.csv
 docs/.obsidian/

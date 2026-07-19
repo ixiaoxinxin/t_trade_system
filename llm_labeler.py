@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -39,6 +40,8 @@ API_USAGE_COLUMNS = [
     "status",
     "created_at",
 ]
+
+LOCAL_ENV_FILE = Path(".env")
 
 PROVIDER_STATUS_COLUMNS = [
     "provider",
@@ -89,7 +92,26 @@ def estimate_cost(
     return input_tokens / 1_000_000 * input_price + output_tokens / 1_000_000 * output_price
 
 
+def load_local_env(path: Path = LOCAL_ENV_FILE) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def build_provider_status_table(config: dict) -> pd.DataFrame:
+    load_local_env()
     llm_config = config.get("llm_labeling", {})
     provider_priority = llm_config.get("provider_priority", [])
     providers = llm_config.get("providers", {})
@@ -161,6 +183,7 @@ def call_chat_completion(
     messages: list[dict],
     timeout_seconds: int,
 ) -> tuple[dict, int, int]:
+    load_local_env()
     api_key_env = str(provider_config.get("api_key_env", "")).strip()
     api_key = os.environ.get(api_key_env, "").strip()
 

@@ -10,20 +10,19 @@ A股隔日T选股系统 v2.0 Streamlit 精简版
 3. 已购买股票优先展示
 4. 市场环境增加板块资金方向展示
 5. 原始 Markdown 报告默认折叠
-6. 人工复盘案例库动态读取
-7. 卖点信号、午盘验证、次日验证字段进一步精简
+6. 页面按真实交易工作流重组
+7. 人工复盘入口下线，复盘沉淀以真实交易记录为准
 """
 
 from pathlib import Path
 import subprocess
 import sys
 import time
-import json
 
 import pandas as pd
 import streamlit as st
 
-from sqlite_store import load_dataframe, load_document, load_jsonl_document, migrate_local_files_to_sqlite
+from sqlite_store import load_dataframe, load_document, migrate_local_files_to_sqlite
 from trade_journal import append_trade_record, build_trade_record, load_trade_records
 
 
@@ -50,9 +49,6 @@ NEXT_DAY_REVIEW_FILE = Path("output/next_day_review.csv")
 NEXT_DAY_REVIEW_MD_FILE = Path("output/next_day_review.md")
 
 FACTOR_PERFORMANCE_FILE = Path("output/factor_performance.csv")
-
-REVIEW_CASES_FILE = Path("output/review_cases.jsonl")
-REVIEW_CASES_MD_FILE = Path("output/review_cases.md")
 
 TRADE_RECORD_FILE = Path("output/trade_records.csv")
 DATASET_QUALITY_REPORT_FILE = Path("output/dataset_quality_report.md")
@@ -134,7 +130,7 @@ def run_main_pipeline_and_refresh() -> None:
 
     all_success = True
 
-    with st.status("正在执行一键主流程...", expanded=True) as status:
+    with st.status("正在生成明日计划...", expanded=True) as status:
         for index, script in enumerate(steps, start=1):
             st.write(f"步骤 {index}/{len(steps)}：{script}")
 
@@ -152,7 +148,7 @@ def run_main_pipeline_and_refresh() -> None:
         if all_success:
             migrate_local_files_to_sqlite()
             status.update(
-                label="一键主流程全部执行完成，正在刷新页面...",
+                label="明日计划生成完成，正在刷新页面...",
                 state="complete",
             )
             time.sleep(1)
@@ -175,34 +171,6 @@ def load_csv(file_path: Path) -> pd.DataFrame:
             df["股票代码"] = df["股票代码"].astype(str).str.zfill(6)
 
         return df
-
-    except Exception as e:
-        st.error(f"读取 {file_path} 失败：{e}")
-        return pd.DataFrame()
-
-
-def load_jsonl(file_path: Path) -> pd.DataFrame:
-    db_df = load_jsonl_document(file_path)
-
-    if not db_df.empty:
-        return db_df
-
-    if not file_path.exists():
-        return pd.DataFrame()
-
-    rows = []
-
-    try:
-        with file_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-
-                if not line:
-                    continue
-
-                rows.append(json.loads(line))
-
-        return pd.DataFrame(rows)
 
     except Exception as e:
         st.error(f"读取 {file_path} 失败：{e}")
@@ -232,20 +200,12 @@ def keep_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return df[existing].copy()
 
 
-def load_bought_codes(
-    trade_record_df: pd.DataFrame,
-    review_df: pd.DataFrame,
-) -> set[str]:
+def load_bought_codes(trade_record_df: pd.DataFrame) -> set[str]:
     bought_codes = set()
 
     if not trade_record_df.empty and "股票代码" in trade_record_df.columns:
         bought_codes.update(
             trade_record_df["股票代码"].astype(str).str.zfill(6).tolist()
-        )
-
-    if not review_df.empty and "股票代码" in review_df.columns:
-        bought_codes.update(
-            review_df["股票代码"].astype(str).str.zfill(6).tolist()
         )
 
     return bought_codes
@@ -347,10 +307,13 @@ def show_top_metrics(
     sell_df: pd.DataFrame,
     lunch_df: pd.DataFrame,
     next_df: pd.DataFrame,
-    review_df: pd.DataFrame,
     trade_record_df: pd.DataFrame,
 ) -> None:
     market = get_market_summary(market_df)
+    closed_trade_count = 0
+
+    if not trade_record_df.empty and "闭环状态" in trade_record_df.columns:
+        closed_trade_count = int(trade_record_df["闭环状态"].astype(str).eq("已闭环").sum())
 
     col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
 
@@ -384,7 +347,7 @@ def show_top_metrics(
         st.metric("交易记录", len(trade_record_df) if not trade_record_df.empty else 0)
 
     with col8:
-        st.metric("复盘案例", len(review_df) if not review_df.empty else 0)
+        st.metric("已闭环", closed_trade_count)
 
     st.caption(f"资金流入方向：{market['资金流入方向']}")
 
@@ -395,7 +358,7 @@ def show_top_metrics(
 
 st.title("A股隔日T选股系统 v2.0")
 
-st.caption("精简版：市场环境 → 明日交易池 → 卖点信号 → 午盘验证 → 次日验证 → 复盘")
+st.caption("工作流版：今日能不能做 → 明天看哪几只 → 实盘怎么处理 → 结果沉淀到数据集")
 
 st.divider()
 
@@ -403,41 +366,40 @@ st.divider()
 # 操作区
 # =========================
 
-st.subheader("操作区")
+st.subheader("日常操作")
 
-col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
-    if st.button("市场环境", width="stretch"):
-        run_single_script_and_refresh("market_environment.py")
-
-with col2:
-    if st.button("一键主流程", width="stretch"):
+    if st.button("生成明日计划", width="stretch"):
         run_main_pipeline_and_refresh()
 
-with col3:
-    if st.button("卖点信号", width="stretch"):
+with col2:
+    if st.button("更新卖点信号", width="stretch"):
         run_single_script_and_refresh("sell_signal_engine.py")
 
-with col4:
+with col3:
     if st.button("午盘验证", width="stretch"):
         run_single_script_and_refresh("lunch_validator.py")
 
-with col5:
-    if st.button("次日验证", width="stretch"):
+with col4:
+    if st.button("次日复盘", width="stretch"):
         run_single_script_and_refresh("next_day_validator.py")
 
-with col6:
-    if st.button("生成复盘库", width="stretch"):
-        run_single_script_and_refresh("review_manager.py")
-
-with col7:
-    if st.button("生成数据集", width="stretch"):
+with col5:
+    if st.button("保存训练数据", width="stretch"):
         run_single_script_and_refresh("dataset_builder.py")
 
-with col8:
-    if st.button("迁移数据库", width="stretch"):
-        run_single_script_and_refresh("sqlite_store.py")
+with st.expander("高级工具", expanded=False):
+    tool_col1, tool_col2 = st.columns(2)
+
+    with tool_col1:
+        if st.button("单独刷新市场环境", width="stretch"):
+            run_single_script_and_refresh("market_environment.py")
+
+    with tool_col2:
+        if st.button("迁移数据库", width="stretch"):
+            run_single_script_and_refresh("sqlite_store.py")
 
 st.caption("页面数据源：SQLite 优先；脚本产生的本地文件会在执行后自动迁移入库。")
 
@@ -455,7 +417,6 @@ sell_signal_df = load_csv(SELL_SIGNAL_FILE)
 lunch_df = load_csv(LUNCH_REVIEW_FILE)
 next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
-review_cases_df = load_jsonl(REVIEW_CASES_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -464,10 +425,9 @@ sector_flow_md = load_markdown(SECTOR_FLOW_MD_FILE)
 sell_signal_md = load_markdown(SELL_SIGNAL_MD_FILE)
 lunch_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
-review_cases_md = load_markdown(REVIEW_CASES_MD_FILE)
 dataset_quality_md = load_markdown(DATASET_QUALITY_REPORT_FILE)
 
-bought_codes = load_bought_codes(trade_record_df, review_cases_df)
+bought_codes = load_bought_codes(trade_record_df)
 
 show_top_metrics(
     market_df=market_df,
@@ -475,7 +435,6 @@ show_top_metrics(
     sell_df=sell_signal_df,
     lunch_df=lunch_df,
     next_df=next_df,
-    review_df=review_cases_df,
     trade_record_df=trade_record_df,
 )
 
@@ -485,107 +444,8 @@ st.divider()
 # Tab 区
 # =========================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
-    "市场环境",
-    "明日交易池",
-    "交易记录",
-    "卖点信号",
-    "午盘验证",
-    "次日验证",
-    "因子表现",
-    "人工复盘",
-    "数据集",
-])
-
-
-with tab1:
-    st.subheader("市场环境")
-
-    if market_md:
-        with st.expander("展开市场环境原始报告", expanded=False):
-            st.markdown(market_md)
-    else:
-        st.warning("暂无市场环境报告，请先点击【市场环境】按钮。")
-
-    st.divider()
-
-    sector_core_df = keep_columns(
-        sector_flow_df,
-        [
-            "资金排名",
-            "板块名称",
-            "板块涨跌幅",
-            "主力净流入",
-            "主力净流入占比",
-            "板块资金标签",
-            "隔夜建议",
-        ],
-    )
-
-    show_table("板块资金方向", sector_core_df.head(15))
-
-
-with tab2:
-    st.subheader("明日交易池")
-
-    st.markdown("""
-### 核心字段说明
-
-| 字段 | 怎么看 |
-|---|---|
-| 隔夜建议等级 | 只优先看 A/B |
-| 风险等级 | 优先低风险 |
-| 所属板块 | 来自可靠映射表，不再使用股票名称关键词 |
-| 板块状态 | 强 / 中性偏强 / 谨慎 / 回避 |
-| 最终评分 | 越高越优先 |
-| 分时结构标签 | 优先强势横盘、尾盘资金回流 |
-| 尾盘抢筹标签 | 优先尾盘抢筹、资金回流 |
-""")
-
-    if daily_plan_md:
-        with st.expander("展开交易计划原始报告", expanded=False):
-            st.markdown(daily_plan_md)
-    else:
-        st.warning("暂无交易计划，请先点击【一键主流程】。")
-
-    st.divider()
-
-    final_df = sort_final_watchlist(final_df)
-
-    if not final_df.empty and "隔夜建议等级" in final_df.columns:
-        trade_df = final_df[final_df["隔夜建议等级"].isin(["A", "B"])].copy()
-    else:
-        trade_df = final_df.copy()
-
-    trade_df = keep_columns(
-        trade_df,
-        [
-            "股票代码",
-            "股票名称",
-            "所属板块",
-            "板块数据状态",
-            "板块当日资金排名",
-            "板块近5日排名",
-            "板块广度",
-            "龙头涨幅",
-            "风险等级",
-            "隔夜建议等级",
-            "最终评分",
-            "分时结构标签",
-            "尾盘抢筹标签",
-            "板块过滤原因",
-            "隔夜建议说明",
-        ],
-    )
-
-    trade_df = add_bought_flag(trade_df, bought_codes)
-
-    show_table("尾盘确认后的 A/B 核心候选", trade_df)
-
-
-with tab3:
+def render_trade_record_panel() -> None:
     st.subheader("交易记录")
-
     st.caption("只记录日内T / 隔日T。手续费按招行证券万2.5、单笔最低5元自动计算，卖出后同步生成到手利润。")
 
     with st.form("trade_record_form", clear_on_submit=True):
@@ -643,7 +503,6 @@ with tab3:
             followed_plan = st.selectbox("是否按计划执行", ["是", "否", "部分执行", "未记录"])
 
         note = st.text_area("备注", placeholder="记录买入理由、卖出理由、错过点、执行偏差等", height=90)
-
         submitted = st.form_submit_button("保存交易记录", width="stretch")
 
         if submitted:
@@ -669,71 +528,137 @@ with tab3:
                 st.error(f"保存失败：{e}")
 
     st.divider()
+    render_trade_record_summary()
 
-    trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
-    if not trade_record_df.empty:
-        open_position_count = int(trade_record_df["闭环状态"].astype(str).eq("未闭环").sum())
-        sold_df = trade_record_df[trade_record_df["闭环状态"].astype(str).eq("已闭环")].copy()
-        total_profit = pd.to_numeric(sold_df["到手利润"], errors="coerce").fillna(0).sum()
-        avg_return = pd.to_numeric(sold_df["收益率"], errors="coerce").dropna()
+def render_trade_record_summary() -> None:
+    current_trade_df = load_trade_records(TRADE_RECORD_FILE)
 
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-
-        with metric_col1:
-            st.metric("交易记录", len(trade_record_df))
-
-        with metric_col2:
-            st.metric("未闭环", open_position_count)
-
-        with metric_col3:
-            st.metric("已实现盈亏", f"{total_profit:.2f}")
-
-        with metric_col4:
-            st.metric("平均收益率", f"{avg_return.mean():.2f}%" if not avg_return.empty else "-")
-
-        recent_trade_df = trade_record_df.sort_values("记录时间", ascending=False).head(30)
-
-        show_table(
-            "最近交易记录",
-            keep_columns(
-                recent_trade_df,
-                [
-                    "记录时间",
-                    "交易日期",
-                    "交易类型",
-                    "股票代码",
-                    "股票名称",
-                    "方向",
-                    "买入价格",
-                    "卖出价格",
-                    "数量",
-                    "买入手续费",
-                    "卖出手续费",
-                    "手续费合计",
-                    "到手利润",
-                    "收益率",
-                    "闭环状态",
-                    "策略来源",
-                    "是否按计划执行",
-                    "备注",
-                ],
-            ),
-        )
-    else:
+    if current_trade_df.empty:
         st.info("暂无交易记录，先保存一笔日内T或隔日T。")
+        return
+
+    open_position_count = int(current_trade_df["闭环状态"].astype(str).eq("未闭环").sum())
+    sold_df = current_trade_df[current_trade_df["闭环状态"].astype(str).eq("已闭环")].copy()
+    total_profit = pd.to_numeric(sold_df["到手利润"], errors="coerce").fillna(0).sum()
+    avg_return = pd.to_numeric(sold_df["收益率"], errors="coerce").dropna()
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+
+    with metric_col1:
+        st.metric("交易记录", len(current_trade_df))
+
+    with metric_col2:
+        st.metric("未闭环", open_position_count)
+
+    with metric_col3:
+        st.metric("已实现盈亏", f"{total_profit:.2f}")
+
+    with metric_col4:
+        st.metric("平均收益率", f"{avg_return.mean():.2f}%" if not avg_return.empty else "-")
+
+    recent_trade_df = current_trade_df.sort_values("记录时间", ascending=False).head(30)
+    show_table(
+        "最近交易记录",
+        keep_columns(
+            recent_trade_df,
+            [
+                "记录时间",
+                "交易日期",
+                "交易类型",
+                "股票代码",
+                "股票名称",
+                "方向",
+                "买入价格",
+                "卖出价格",
+                "数量",
+                "买入手续费",
+                "卖出手续费",
+                "手续费合计",
+                "到手利润",
+                "收益率",
+                "闭环状态",
+                "策略来源",
+                "是否按计划执行",
+                "备注",
+            ],
+        ),
+    )
 
 
-with tab4:
-    st.subheader("卖点信号")
+def render_market_panel() -> None:
+    st.subheader("今日市场")
+
+    if market_md:
+        with st.expander("展开市场环境原始报告", expanded=False):
+            st.markdown(market_md)
+    else:
+        st.warning("暂无市场环境报告，请点击【生成明日计划】或【单独刷新市场环境】。")
+
+    sector_core_df = keep_columns(
+        sector_flow_df,
+        [
+            "资金排名",
+            "板块名称",
+            "板块涨跌幅",
+            "主力净流入",
+            "主力净流入占比",
+            "板块资金标签",
+            "隔夜建议",
+        ],
+    )
+    show_table("板块资金方向", sector_core_df.head(15))
+
+
+def render_trade_plan_panel() -> None:
+    st.subheader("明日计划")
+    st.caption("生成明日计划会自动串起市场环境、候选扫描、尾盘确认和交易计划。日常只看 A/B 候选。")
+
+    if daily_plan_md:
+        with st.expander("展开交易计划原始报告", expanded=False):
+            st.markdown(daily_plan_md)
+    else:
+        st.warning("暂无交易计划，请点击【生成明日计划】。")
+
+    st.divider()
+    sorted_final_df = sort_final_watchlist(final_df)
+
+    if not sorted_final_df.empty and "隔夜建议等级" in sorted_final_df.columns:
+        trade_df = sorted_final_df[sorted_final_df["隔夜建议等级"].isin(["A", "B"])].copy()
+    else:
+        trade_df = sorted_final_df.copy()
+
+    trade_df = keep_columns(
+        trade_df,
+        [
+            "股票代码",
+            "股票名称",
+            "所属板块",
+            "板块数据状态",
+            "板块当日资金排名",
+            "板块近5日排名",
+            "板块广度",
+            "龙头涨幅",
+            "风险等级",
+            "隔夜建议等级",
+            "最终评分",
+            "分时结构标签",
+            "尾盘抢筹标签",
+            "板块过滤原因",
+            "隔夜建议说明",
+        ],
+    )
+    trade_df = add_bought_flag(trade_df, bought_codes)
+    show_table("A/B 核心候选", trade_df)
+
+
+def render_sell_signal_panel() -> None:
+    st.subheader("持仓卖点")
 
     if sell_signal_md:
         with st.expander("展开卖点信号原始报告", expanded=False):
             st.markdown(sell_signal_md)
     else:
-        st.warning("暂无卖点信号，请点击【卖点信号】按钮。")
-
-    st.divider()
+        st.warning("暂无卖点信号，有持仓时点击【更新卖点信号】。")
 
     sell_core_df = keep_columns(
         sell_signal_df,
@@ -748,13 +673,11 @@ with tab4:
             "卖出理由",
         ],
     )
-
     sell_core_df = add_bought_flag(sell_core_df, bought_codes)
-
     show_table("卖点核心信号", sell_core_df)
 
 
-with tab5:
+def render_lunch_panel() -> None:
     st.subheader("午盘验证")
 
     if lunch_md:
@@ -762,8 +685,6 @@ with tab5:
             st.markdown(lunch_md)
     else:
         st.warning("暂无午盘验证报告，请在 11:20 后点击【午盘验证】。")
-
-    st.divider()
 
     lunch_core_df = keep_columns(
         lunch_df,
@@ -777,22 +698,18 @@ with tab5:
             "下午操作建议",
         ],
     )
-
     lunch_core_df = add_bought_flag(lunch_core_df, bought_codes)
-
     show_table("午盘核心结果", lunch_core_df)
 
 
-with tab6:
-    st.subheader("次日验证")
+def render_next_day_panel() -> None:
+    st.subheader("系统次日验证")
 
     if next_md:
         with st.expander("展开次日验证原始报告", expanded=False):
             st.markdown(next_md)
     else:
-        st.warning("暂无次日验证报告，请次日收盘后运行。")
-
-    st.divider()
+        st.warning("暂无次日验证报告，请次日收盘后点击【次日复盘】。")
 
     next_core_df = keep_columns(
         next_df,
@@ -814,7 +731,6 @@ with tab6:
             "是否验证成功",
         ],
     )
-
     next_core_df = add_bought_flag(next_core_df, bought_codes)
 
     if not next_core_df.empty and "是否验证成功" in next_core_df.columns:
@@ -828,9 +744,8 @@ with tab6:
     show_table("验证失败 / 待优化", failed_df)
 
 
-with tab7:
+def render_factor_panel() -> None:
     st.subheader("因子表现")
-
     factor_core_df = keep_columns(
         factor_df,
         [
@@ -845,46 +760,17 @@ with tab7:
             "平均收盘涨幅",
         ],
     )
-
     show_table("因子表现统计", factor_core_df)
 
 
-with tab8:
-    st.subheader("人工复盘案例库")
-
-    if review_cases_md:
-        with st.expander("展开复盘原始报告", expanded=False):
-            st.markdown(review_cases_md)
-    else:
-        st.warning("暂无复盘案例库，请点击【生成复盘库】按钮。")
-
-    st.divider()
-
-    review_core_df = keep_columns(
-        review_cases_df,
-        [
-            "日期",
-            "股票代码",
-            "股票名称",
-            "交易类型",
-            "实际盈亏",
-            "市场环境",
-            "系统结构",
-            "系统结论",
-        ],
-    )
-
-    show_table("复盘案例明细", review_core_df)
-
-
-with tab9:
-    st.subheader("v2.5 数据集")
+def render_dataset_panel() -> None:
+    st.subheader("数据集与模型地基")
 
     if dataset_quality_md:
         with st.expander("展开数据集质量报告", expanded=True):
             st.markdown(dataset_quality_md)
     else:
-        st.warning("暂无数据集质量报告，请点击【生成数据集】按钮。")
+        st.warning("暂无数据集质量报告，请点击【保存训练数据】。")
 
     dataset_samples_df = load_csv(DATASET_SAMPLES_FILE)
     feature_snapshot_df = load_csv(FEATURE_SNAPSHOT_FILE)
@@ -906,3 +792,38 @@ with tab9:
         st.metric("预测日志", len(prediction_log_df) if not prediction_log_df.empty else 0)
 
     show_table("样本主表预览", dataset_samples_df.head(30))
+
+
+tab_today, tab_plan, tab_review, tab_data = st.tabs([
+    "今日操作台",
+    "明日计划",
+    "复盘验证",
+    "数据与模型",
+])
+
+
+with tab_today:
+    render_market_panel()
+    st.divider()
+    render_trade_record_panel()
+    st.divider()
+    render_sell_signal_panel()
+    st.divider()
+    render_lunch_panel()
+
+
+with tab_plan:
+    render_trade_plan_panel()
+
+
+with tab_review:
+    render_next_day_panel()
+    st.divider()
+    st.subheader("真实交易复盘")
+    render_trade_record_summary()
+    st.divider()
+    render_factor_panel()
+
+
+with tab_data:
+    render_dataset_panel()

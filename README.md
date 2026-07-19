@@ -35,7 +35,7 @@ PushPlus token 当前沿用既有代码逻辑，可通过环境变量 `PUSHPLUS_
 python main.py --help
 ```
 
-一键主流程：
+生成明日计划：
 
 ```bash
 python main.py pipeline
@@ -80,7 +80,7 @@ output/run_manifest.json
 streamlit run app.py
 ```
 
-前端提供市场环境、主流程、卖点信号、午盘验证、次日验证和复盘库入口。
+前端按真实工作流分为「今日操作台」「明日计划」「复盘验证」「数据与模型」。日常入口是生成明日计划、更新卖点信号、午盘验证、次日复盘和保存训练数据。
 
 ## 主要输出
 
