@@ -1,0 +1,1 @@
+﻿record_id,recorded_at,trade_date,trade_type,stock_code,stock_name,direction,buy_price,sell_price,quantity,buy_commission,sell_commission,total_commission,net_profit,return_rate,closed_status,strategy_source,followed_plan,note

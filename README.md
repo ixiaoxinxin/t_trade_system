@@ -22,6 +22,8 @@ pip install -r requirements.txt
 - `tail_confirm`：尾盘确认阈值。
 - `risk`：风险扣分阈值。
 - `runtime`：缓存和候选扫描数量。
+- `dataset`：SQLite 样本库位置、CSV 导出目录、切分目录。
+- `llm_labeling`：大模型辅助标签开关、国产供应商优先级、成本上限和 API Key 环境变量。
 
 PushPlus token 当前沿用既有代码逻辑，可通过环境变量 `PUSHPLUS_TOKEN` 覆盖。
 
@@ -57,6 +59,7 @@ python main.py sell
 python main.py next-day
 python main.py review
 python main.py factor-rank
+python main.py dataset
 ```
 
 每次通过 `main.py` 运行后，会生成：
@@ -92,6 +95,16 @@ streamlit run app.py
 - `output/next_day_review.md`
 - `output/factor_performance.csv`
 - `output/run_manifest.json`
+- `data/dataset/trade_dataset.sqlite3`
+- `data/dataset/dataset_samples.csv`
+- `data/dataset/feature_snapshot.csv`
+- `data/dataset/label_snapshot.csv`
+- `data/dataset/prediction_log.csv`
+- `data/dataset/trade_records.csv`
+- `data/dataset/llm_label_snapshot.csv`
+- `data/dataset/api_usage_log.csv`
+- `data/dataset/splits/latest.json`
+- `output/dataset_quality_report.md`
 
 ## 常见问题
 
@@ -112,3 +125,7 @@ v2.0 按当前决策去掉轻量板块识别功能，避免基于股票名称的
 ### 为什么次日验证结果更细了？
 
 v2.0 不再只看“次日最高达到 1% 且未触发 -2%”，而是先判断是否触达计划低吸区间，再区分给买点成功、给买点失败、未给买点、风险触发和数据不足。
+
+### 数据集为什么用 SQLite？
+
+v2.5 默认用 SQLite：免费、轻量、无需启动服务，数据库文件位于 `data/dataset/trade_dataset.sqlite3`。后续样本量变大后，可从 CSV/SQLite 迁移到 DuckDB 或 PostgreSQL。

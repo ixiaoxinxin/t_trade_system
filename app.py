@@ -54,6 +54,11 @@ REVIEW_CASES_FILE = Path("output/review_cases.jsonl")
 REVIEW_CASES_MD_FILE = Path("output/review_cases.md")
 
 TRADE_RECORD_FILE = Path("output/trade_records.csv")
+DATASET_QUALITY_REPORT_FILE = Path("output/dataset_quality_report.md")
+DATASET_SAMPLES_FILE = Path("data/dataset/dataset_samples.csv")
+FEATURE_SNAPSHOT_FILE = Path("data/dataset/feature_snapshot.csv")
+LABEL_SNAPSHOT_FILE = Path("data/dataset/label_snapshot.csv")
+PREDICTION_LOG_FILE = Path("data/dataset/prediction_log.csv")
 
 
 st.set_page_config(
@@ -382,7 +387,7 @@ st.divider()
 
 st.subheader("操作区")
 
-col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
 with col1:
     if st.button("市场环境", width="stretch"):
@@ -408,6 +413,10 @@ with col6:
     if st.button("生成复盘库", width="stretch"):
         run_single_script_and_refresh("review_manager.py")
 
+with col7:
+    if st.button("生成数据集", width="stretch"):
+        run_single_script_and_refresh("dataset_builder.py")
+
 st.divider()
 
 # =========================
@@ -432,6 +441,7 @@ sell_signal_md = load_markdown(SELL_SIGNAL_MD_FILE)
 lunch_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
 review_cases_md = load_markdown(REVIEW_CASES_MD_FILE)
+dataset_quality_md = load_markdown(DATASET_QUALITY_REPORT_FILE)
 
 bought_codes = load_bought_codes(trade_record_df, review_cases_df)
 
@@ -451,7 +461,7 @@ st.divider()
 # Tab 区
 # =========================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "市场环境",
     "明日交易池",
     "交易记录",
@@ -460,6 +470,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "次日验证",
     "因子表现",
     "人工复盘",
+    "数据集",
 ])
 
 
@@ -840,3 +851,34 @@ with tab8:
     )
 
     show_table("复盘案例明细", review_core_df)
+
+
+with tab9:
+    st.subheader("v2.5 数据集")
+
+    if dataset_quality_md:
+        with st.expander("展开数据集质量报告", expanded=True):
+            st.markdown(dataset_quality_md)
+    else:
+        st.warning("暂无数据集质量报告，请点击【生成数据集】按钮。")
+
+    dataset_samples_df = load_csv(DATASET_SAMPLES_FILE)
+    feature_snapshot_df = load_csv(FEATURE_SNAPSHOT_FILE)
+    label_snapshot_df = load_csv(LABEL_SNAPSHOT_FILE)
+    prediction_log_df = load_csv(PREDICTION_LOG_FILE)
+
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+
+    with metric_col1:
+        st.metric("样本", len(dataset_samples_df) if not dataset_samples_df.empty else 0)
+
+    with metric_col2:
+        st.metric("特征快照", len(feature_snapshot_df) if not feature_snapshot_df.empty else 0)
+
+    with metric_col3:
+        st.metric("标签", len(label_snapshot_df) if not label_snapshot_df.empty else 0)
+
+    with metric_col4:
+        st.metric("预测日志", len(prediction_log_df) if not prediction_log_df.empty else 0)
+
+    show_table("样本主表预览", dataset_samples_df.head(30))

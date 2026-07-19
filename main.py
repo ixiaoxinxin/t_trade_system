@@ -60,6 +60,22 @@ COMMANDS = {
         "runner": ("factor_ranker", "export_factor_rank"),
         "outputs": ["output/factor_rank.csv", "output/factor_rank.md"],
     },
+    "dataset": {
+        "description": "生成 v2.5 训练数据集与标签系统",
+        "runner": ("dataset_builder", "build_dataset"),
+        "outputs": [
+            "data/dataset/trade_dataset.sqlite3",
+            "data/dataset/dataset_samples.csv",
+            "data/dataset/feature_snapshot.csv",
+            "data/dataset/label_snapshot.csv",
+            "data/dataset/prediction_log.csv",
+            "data/dataset/trade_records.csv",
+            "data/dataset/llm_label_snapshot.csv",
+            "data/dataset/api_usage_log.csv",
+            "data/dataset/splits/latest.json",
+            "output/dataset_quality_report.md",
+        ],
+    },
 }
 
 

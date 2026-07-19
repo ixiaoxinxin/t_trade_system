@@ -42,6 +42,49 @@ sector_filter:
     - 谨慎
   cautious_score_penalty: 8
 
+dataset:
+  database: sqlite
+  database_path: data/dataset/trade_dataset.sqlite3
+  export_dir: data/dataset
+  split_dir: data/dataset/splits
+
+llm_labeling:
+  enabled: false
+  provider_priority:
+    - deepseek
+    - doubao
+    - qwen
+    - glm
+  max_daily_cost_cny: 20
+  min_confidence: 0.7
+  prompt_version: v2.5-labeling-001
+  request_timeout_seconds: 20
+  providers:
+    deepseek:
+      api_key_env: DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com/chat/completions
+      model: deepseek-chat
+      input_price_cny_per_million: 1.95
+      output_price_cny_per_million: 7.95
+    doubao:
+      api_key_env: DOUBAO_API_KEY
+      base_url: https://ark.cn-beijing.volces.com/api/v3/chat/completions
+      model: doubao-seed-1-6
+      input_price_cny_per_million: 0.8
+      output_price_cny_per_million: 2.0
+    qwen:
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+      model: qwen-plus
+      input_price_cny_per_million: 0.8
+      output_price_cny_per_million: 2.0
+    glm:
+      api_key_env: ZHIPUAI_API_KEY
+      base_url: https://open.bigmodel.cn/api/paas/v4/chat/completions
+      model: glm-4-flash
+      input_price_cny_per_million: 0.0
+      output_price_cny_per_million: 0.0
+
 market_environment:
   top_sector_count: 10
   avoid_sector_count: 10

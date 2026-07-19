@@ -34,6 +34,46 @@ v2.5 的目标是建立机器学习前的数据地基，把每天的候选、交
 - 不把大模型判断作为唯一标签来源。
 - 不自动下单。
 
+### 2.3 数据库选型
+
+v2.5 默认选择 `SQLite` 作为本地样本库数据库。
+
+选择理由：
+
+- 轻量：SQLite 是单文件数据库，不需要启动服务，适合个人交易系统。
+- 免费：Python 标准库自带 `sqlite3`，不新增依赖和成本。
+- 易扩展：当前可沉淀样本、特征、标签、预测日志、真实交易记录和 API 调用记录；后续可导出 CSV，迁移到 DuckDB 或 PostgreSQL。
+- 易备份：数据库文件默认放在 `data/dataset/trade_dataset.sqlite3`，可以随仓库或本地备份一起管理。
+
+边界：
+
+- SQLite 作为 v2.5-v2.7 的默认本地数据库。
+- 如果后续样本达到百万级、需要复杂分析查询，可增加 DuckDB 作为分析层。
+- 如果后续需要多设备并发、Web 服务或多人协作，再迁移 PostgreSQL。
+
+配置：
+
+```yaml
+dataset:
+  database: sqlite
+  database_path: data/dataset/trade_dataset.sqlite3
+  export_dir: data/dataset
+  split_dir: data/dataset/splits
+```
+
+### 2.4 当前实现状态
+
+本次 2.1 commit 将 v2.5 的数据地基先落到可运行状态：
+
+- 已建立 SQLite 样本库：`data/dataset/trade_dataset.sqlite3`。
+- 已建立并导出 7 张表：`dataset_samples`、`feature_snapshot`、`label_snapshot`、`prediction_log`、`trade_records`、`llm_label_snapshot`、`api_usage_log`。
+- 已新增 `dataset_builder.py`，负责从交易池、次日验证、市场环境、运行记录和真实交易记录生成数据集。
+- 已新增 `llm_labeler.py`，支持 DeepSeek、豆包、通义千问、智谱等 OpenAI-compatible API 配置；默认关闭，缺少 API Key 时自动跳过，不阻断数据集生成。
+- 已新增 `python main.py dataset` 统一入口。
+- 已新增 Streamlit 页面「生成数据集」按钮和「数据集」Tab。
+- 已新增时间序列切分文件：`data/dataset/splits/latest.json`，当前先按预测日期 70% / 15% / 15% 切分；样本量扩大后升级为 2年 / 3个月 / 1个月滚动窗口。
+- 已新增质量报告：`output/dataset_quality_report.md`。
+
 ## 3. 数据资产设计
 
 ### 3.1 样本主表 `dataset_samples`
@@ -262,6 +302,12 @@ v2.5 的目标是建立机器学习前的数据地基，把每天的候选、交
 新增 `config.yaml` 配置建议：
 
 ```yaml
+dataset:
+  database: sqlite
+  database_path: data/dataset/trade_dataset.sqlite3
+  export_dir: data/dataset
+  split_dir: data/dataset/splits
+
 llm_labeling:
   enabled: false
   provider_priority:
@@ -271,25 +317,33 @@ llm_labeling:
     - glm
   max_daily_cost_cny: 20
   min_confidence: 0.70
-  review_on_conflict: true
   prompt_version: v2.5-labeling-001
+  request_timeout_seconds: 20
   providers:
     deepseek:
-      base_url: https://api.deepseek.com
       api_key_env: DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com/chat/completions
       model: deepseek-chat
+      input_price_cny_per_million: 1.95
+      output_price_cny_per_million: 7.95
     doubao:
-      base_url: https://ark.cn-beijing.volces.com/api/v3
-      api_key_env: ARK_API_KEY
-      model: doubao-seed-1-8
+      api_key_env: DOUBAO_API_KEY
+      base_url: https://ark.cn-beijing.volces.com/api/v3/chat/completions
+      model: doubao-seed-1-6
+      input_price_cny_per_million: 0.8
+      output_price_cny_per_million: 2.0
     qwen:
-      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
-      model: qwen-max
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+      model: qwen-plus
+      input_price_cny_per_million: 0.8
+      output_price_cny_per_million: 2.0
     glm:
-      base_url: https://open.bigmodel.cn/api/paas/v4
-      api_key_env: ZHIPU_API_KEY
-      model: glm-4.5-air
+      api_key_env: ZHIPUAI_API_KEY
+      base_url: https://open.bigmodel.cn/api/paas/v4/chat/completions
+      model: glm-4-flash
+      input_price_cny_per_million: 0.0
+      output_price_cny_per_million: 0.0
 ```
 
 要求：
@@ -307,13 +361,15 @@ llm_labeling:
 
 - 新增 `dataset_builder.py`。
 - 读取 `output/final_watchlist.csv`、`output/daily_plan.md`、`output/market_environment.json`、`output/run_manifest.json`、`output/trade_records.csv`。
-- 生成 `data/dataset/samples.csv`。
+- 生成 `data/dataset/dataset_samples.csv`。
 - 生成 `data/dataset/feature_snapshot.csv`。
+- 生成 `data/dataset/trade_dataset.sqlite3`。
 
 验收：
 
 - 可以为现有输出生成样本主表。
 - 样本包含 `sample_id`、预测日期、目标日期、规则版本、配置摘要。
+- `python main.py dataset` 可单独运行。
 
 ### M1.5 真实交易记录入口
 
@@ -359,12 +415,14 @@ llm_labeling:
 - 支持 OpenAI-compatible API 客户端。
 - 支持 DeepSeek、豆包、通义、智谱的 provider 配置。
 - 输出 `data/dataset/llm_label_snapshot.csv` 和 `data/dataset/label_review_queue.csv`。
+- 输出 `data/dataset/api_usage_log.csv`，记录供应商、模型、token 和估算成本。
 
 验收：
 
 - 未配置 API Key 时不会阻断数据集生成。
 - 配置 API Key 后可对小样本生成结构化 JSON 辅助标签。
-- 冲突样本进入人工复核队列。
+- 调用失败时按 `provider_priority` 自动回退。
+- 冲突样本进入人工复核队列。当前 2.1 先记录 `needs_manual_review` 和 `conflict_fields`，后续补独立队列文件。
 
 ### M4 数据质量报告
 
@@ -395,7 +453,7 @@ llm_labeling:
 ## 8. 验收标准
 
 - `python main.py dataset` 可生成样本、特征、标签和质量报告。
-- `data/dataset/samples.csv`、`feature_snapshot.csv`、`label_snapshot.csv` 存在。
+- `data/dataset/dataset_samples.csv`、`feature_snapshot.csv`、`label_snapshot.csv` 存在。
 - `output/trade_records.csv` 可记录真实交易，并作为个性化样本输入。
 - 标签计算可在无大模型 API Key 时完成。
 - 大模型辅助标签可配置开启，并支持成本上限。
