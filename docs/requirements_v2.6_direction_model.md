@@ -39,7 +39,8 @@ v2.6 依赖 v2.5 已完成的数据地基：
 - 在卖点信号中固定置顶。
 - 在午盘验证中固定置顶。
 - 在次日复盘中固定置顶。
-- 在页面「今日操作台」增加固定持仓跟踪区，聚合交易池、卖点、午盘、次日复盘和模型预测。
+- 在页面「今日操作台」增加固定持仓监控区，一票一行展示买点、卖点、午盘、次日复盘和模型预测。
+- 提供单独按钮刷新固定持仓买点和卖点，输出 `output/fixed_holdings_signals.csv`。
 
 ### 3.2 数据规则
 
@@ -124,10 +125,11 @@ direction_up_close = 次日收盘涨幅 > 0
 
 ### 8.1 今日操作台
 
-新增「固定持仓跟踪」：
+新增「固定持仓监控」：
 
 - 展示固定持仓五只股票。
-- 聚合卖点、午盘、次日复盘和模型概率。
+- 一票一行展示买点区间、买点状态、卖点信号、卖点理由和模型概率。
+- 保留午盘、次日复盘的固定持仓验证状态表。
 - 行情缺失时展示待刷新状态。
 
 ### 8.2 明日计划
@@ -156,6 +158,7 @@ direction_up_close = 次日收盘涨幅 > 0
 
 ```bash
 python main.py holdings-refresh
+python main.py holdings-signals
 python main.py model-train
 python main.py model-predict
 python main.py model-predict --stock-code 002466
@@ -166,6 +169,7 @@ python main.py model-predict --stock-code 002466
 - 固定持仓五只股票在卖点信号、午盘验证、次日复盘中置顶展示。
 - 固定持仓行情缺失时仍显示，不直接跳过。
 - `python main.py holdings-refresh` 可刷新固定持仓日线与分钟数据。
+- `python main.py holdings-signals` 可刷新固定持仓买点区间、买点状态和卖点信号。
 - `python main.py model-train` 可生成模型文件和评估报告。
 - `python main.py model-predict` 可生成全市场候选概率排序。
 - `python main.py model-predict --stock-code 002466` 可输出单只股票预测结果。

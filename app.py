@@ -59,6 +59,8 @@ LABEL_SNAPSHOT_FILE = Path("data/dataset/label_snapshot.csv")
 PREDICTION_LOG_FILE = Path("data/dataset/prediction_log.csv")
 MODEL_PREDICTION_FILE = Path("output/model_predictions_v2.6.csv")
 MODEL_EVALUATION_MD_FILE = Path("output/model_evaluation_v2.6.md")
+FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
+FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 
 
 st.set_page_config(
@@ -417,8 +419,39 @@ def render_fixed_holding_snapshot(
     next_df: pd.DataFrame,
     prediction_df: pd.DataFrame,
 ) -> None:
-    st.subheader("固定持仓跟踪")
-    st.caption("融捷股份、云天化、大为股份、神火股份、天齐锂业每日置顶，用于卖点、午盘、次日复盘和模型样本沉淀。")
+    st.subheader("固定持仓监控")
+    st.caption("融捷股份、云天化、大为股份、神火股份、天齐锂业单独成表。先看买点区间和卖点信号，再看午盘/次日结果。")
+
+    signal_df = load_csv(FIXED_HOLDINGS_SIGNAL_FILE)
+    signal_df = add_model_probability(signal_df, prediction_df)
+
+    if signal_df.empty:
+        st.info("暂无固定持仓买卖点，请点击【刷新持仓买卖点】。")
+    else:
+        show_table(
+            "固定持仓买点 / 卖点",
+            keep_columns(
+                signal_df,
+                [
+                    "刷新时间",
+                    "股票代码",
+                    "股票名称",
+                    "当前价",
+                    "买点下限",
+                    "买点上限",
+                    "买点状态",
+                    "卖点信号",
+                    "卖点理由",
+                    "当前涨幅",
+                    "高点回撤",
+                    "次日上涨概率",
+                    "方向置信度",
+                    "模型方向",
+                    "日线状态",
+                    "分钟状态",
+                ],
+            ),
+        )
 
     fixed_codes = fixed_holding_codes()
     frames = []
@@ -441,13 +474,13 @@ def render_fixed_holding_snapshot(
         frames.append(temp)
 
     if not frames:
-        st.info("固定持仓暂无刷新结果，请点击【更新卖点信号】、【午盘验证】或【次日复盘】。")
+        st.info("固定持仓暂无卖点/午盘/次日刷新结果，请点击【更新卖点信号】、【午盘验证】或【次日复盘】。")
         return
 
     fixed_df = pd.concat(frames, ignore_index=True)
     fixed_df = add_model_probability(fixed_df, prediction_df)
     show_table(
-        "固定持仓最新状态",
+        "固定持仓验证状态",
         keep_columns(
             fixed_df,
             [
@@ -511,7 +544,7 @@ with col5:
         run_single_script_and_refresh("dataset_builder.py")
 
 with st.expander("高级工具", expanded=False):
-    tool_col1, tool_col2, tool_col3 = st.columns(3)
+    tool_col1, tool_col2, tool_col3, tool_col4 = st.columns(4)
 
     with tool_col1:
         if st.button("单独刷新市场环境", width="stretch"):
@@ -522,6 +555,10 @@ with st.expander("高级工具", expanded=False):
             run_main_command_and_refresh("holdings-refresh")
 
     with tool_col3:
+        if st.button("刷新持仓买卖点", width="stretch"):
+            run_main_command_and_refresh("holdings-signals")
+
+    with tool_col4:
         if st.button("迁移数据库", width="stretch"):
             run_single_script_and_refresh("sqlite_store.py")
 

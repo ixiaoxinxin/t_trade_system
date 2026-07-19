@@ -94,6 +94,11 @@ COMMANDS = {
         "runner": ("fixed_holdings", "refresh_fixed_holding_market_data"),
         "outputs": ["output/fixed_holdings_refresh.csv", "cache/daily", "cache/minute"],
     },
+    "holdings-signals": {
+        "description": "刷新固定持仓买点与卖点",
+        "runner": ("fixed_holdings", "run_fixed_holding_trade_signals"),
+        "outputs": ["output/fixed_holdings_signals.csv"],
+    },
     "model-train": {
         "description": "训练 v2.6 次日涨跌方向分类模型",
         "runner": ("direction_model", "run_model_train"),

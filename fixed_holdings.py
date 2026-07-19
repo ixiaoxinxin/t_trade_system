@@ -22,6 +22,7 @@ FIXED_HOLDINGS = [
 
 FIXED_REASON = "固定持仓每日跟踪"
 FIXED_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
+FIXED_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 
 
 def fixed_holding_codes() -> set[str]:
@@ -55,6 +56,192 @@ def latest_daily_reference(stock_code: str) -> tuple[float, str]:
             return price, "日线已刷新"
 
     return 0.0, "日线缺少收盘价"
+
+
+def standardize_daily(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    result = df.rename(columns={
+        "日期": "date",
+        "收盘": "close",
+        "最高": "high",
+        "最低": "low",
+        "开盘": "open",
+        "成交额": "amount",
+    }).copy()
+
+    for col in ["open", "high", "low", "close", "amount"]:
+        if col in result.columns:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+
+    if "date" in result.columns:
+        result["date"] = pd.to_datetime(result["date"], errors="coerce")
+
+    return result.dropna(subset=["close"]).reset_index(drop=True)
+
+
+def standardize_minute(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    result = df.rename(columns={
+        "时间": "datetime",
+        "日期": "datetime",
+        "收盘": "close",
+        "最新价": "close",
+        "最高": "high",
+        "最低": "low",
+        "开盘": "open",
+        "成交额": "amount",
+        "成交量": "volume",
+    }).copy()
+
+    for col in ["open", "high", "low", "close", "amount", "volume"]:
+        if col in result.columns:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+
+    if "datetime" in result.columns:
+        result["datetime"] = pd.to_datetime(result["datetime"], errors="coerce")
+        result = result.sort_values("datetime")
+
+    return result.dropna(subset=["close"]).reset_index(drop=True)
+
+
+def calculate_buy_zone(daily_df: pd.DataFrame, reference_price: float) -> tuple[float, float, str]:
+    if daily_df is not None and not daily_df.empty and "close" in daily_df.columns:
+        close_series = pd.to_numeric(daily_df["close"], errors="coerce").dropna()
+
+        if len(close_series) >= 5:
+            ma5 = float(close_series.tail(5).mean())
+            return ma5 * 0.99, ma5 * 1.01, "MA5上下1%"
+
+    if reference_price > 0:
+        return reference_price * 0.98, reference_price * 0.99, "收盘价回撤1%-2%"
+
+    return 0.0, 0.0, "数据不足"
+
+
+def classify_buy_status(current_price: float, buy_low: float, buy_high: float, reference_price: float) -> str:
+    if current_price <= 0 or buy_low <= 0 or buy_high <= 0:
+        return "待刷新"
+
+    if buy_low <= current_price <= buy_high:
+        return "进入买点区"
+
+    if current_price < buy_low:
+        return "低于买点区，等企稳"
+
+    if reference_price > 0 and current_price >= reference_price * 1.01:
+        return "偏离买点，不追"
+
+    return "高于买点，等回落"
+
+
+def build_signal_watchlist_row(stock_code: str, stock_name: str, reference_price: float) -> pd.Series:
+    row = build_fixed_row(
+        [
+            "股票代码",
+            "股票名称",
+            "固定持仓",
+            "置顶原因",
+            "行情刷新状态",
+            "隔夜建议等级",
+            "隔夜建议说明",
+            "分时结构标签",
+            "尾盘抢筹标签",
+            "最终评分",
+            "尾盘评分",
+            "候选评分",
+            "收盘价",
+            "最新收盘价",
+            "昨收",
+        ],
+        stock_code,
+        stock_name,
+    )
+
+    if reference_price > 0:
+        row["收盘价"] = reference_price
+        row["最新收盘价"] = reference_price
+        row["昨收"] = reference_price
+
+    return pd.Series(row)
+
+
+def run_fixed_holding_trade_signals() -> pd.DataFrame:
+    from sell_signal_engine import build_sell_signal_row, load_market_environment
+
+    market_env = load_market_environment()
+    rows = []
+
+    for item in FIXED_HOLDINGS:
+        code = normalize_code(item["股票代码"])
+        name = item["股票名称"]
+        daily_status = "未刷新"
+        minute_status = "未刷新"
+        reference_price = 0.0
+        current_price = 0.0
+        day_high = 0.0
+        day_low = 0.0
+
+        try:
+            daily_df = standardize_daily(get_stock_daily(code))
+            daily_status = "成功" if not daily_df.empty else "日线为空"
+            if not daily_df.empty:
+                reference_price = safe_float(daily_df["close"].iloc[-1])
+        except Exception as exc:
+            daily_df = pd.DataFrame()
+            daily_status = f"失败：{exc}"
+
+        try:
+            minute_df = standardize_minute(get_stock_minute(code, period="1"))
+            minute_status = "成功" if not minute_df.empty else "分钟为空"
+            if not minute_df.empty:
+                latest_date = minute_df["datetime"].dt.date.max() if "datetime" in minute_df.columns else None
+                today_minute = minute_df[minute_df["datetime"].dt.date.eq(latest_date)].copy() if latest_date else minute_df
+                current_price = safe_float(today_minute["close"].iloc[-1])
+                day_high = safe_float(today_minute["high"].max()) if "high" in today_minute.columns else current_price
+                day_low = safe_float(today_minute["low"].min()) if "low" in today_minute.columns else current_price
+        except Exception as exc:
+            minute_status = f"失败：{exc}"
+
+        buy_low, buy_high, buy_basis = calculate_buy_zone(daily_df, reference_price)
+        buy_status = classify_buy_status(current_price, buy_low, buy_high, reference_price)
+
+        sell_row = build_sell_signal_row(build_signal_watchlist_row(code, name, reference_price), market_env)
+        sell_signal = sell_row.get("卖出信号", "待刷新") if sell_row else "待刷新"
+        sell_reason = sell_row.get("卖出理由", "固定持仓卖点数据不足，请刷新行情。") if sell_row else "固定持仓卖点数据不足，请刷新行情。"
+        current_pct = sell_row.get("当前涨幅", 0) if sell_row else 0
+        pullback_pct = sell_row.get("高点回撤", 0) if sell_row else 0
+
+        rows.append({
+            "刷新时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "股票代码": code,
+            "股票名称": name,
+            "固定持仓": "是",
+            "参考价": round(reference_price, 3) if reference_price else "",
+            "当前价": round(current_price, 3) if current_price else "",
+            "日内最高": round(day_high, 3) if day_high else "",
+            "日内最低": round(day_low, 3) if day_low else "",
+            "买点下限": round(buy_low, 3) if buy_low else "",
+            "买点上限": round(buy_high, 3) if buy_high else "",
+            "买点依据": buy_basis,
+            "买点状态": buy_status,
+            "卖点信号": sell_signal,
+            "卖点理由": sell_reason,
+            "当前涨幅": current_pct,
+            "高点回撤": pullback_pct,
+            "日线状态": daily_status,
+            "分钟状态": minute_status,
+        })
+
+    df = pd.DataFrame(rows)
+    FIXED_SIGNAL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(FIXED_SIGNAL_FILE, index=False, encoding="utf-8-sig")
+    print(f"固定持仓买卖点刷新完成：{FIXED_SIGNAL_FILE}")
+    print(df.to_string(index=False))
+    return df
 
 
 def refresh_fixed_holding_market_data() -> pd.DataFrame:

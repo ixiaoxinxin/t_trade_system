@@ -1,28 +1,25 @@
 {
   "product_version": "2.0",
-  "generated_at": "2026-07-19 16:33:31",
-  "command": "dataset",
+  "generated_at": "2026-07-19 18:12:49",
+  "command": "holdings-signals",
   "config_summary": {
-    "max_count": null
+    "max_count": null,
+    "stock_code": null
   },
   "steps": [
     {
-      "name": "dataset",
-      "description": "生成 v2.5 训练数据集与标签系统",
+      "name": "holdings-signals",
+      "description": "刷新固定持仓买点与卖点",
       "success": true,
-      "started_at": "2026-07-19 16:33:23",
-      "finished_at": "2026-07-19 16:33:31",
+      "started_at": "2026-07-19 18:12:48",
+      "finished_at": "2026-07-19 18:12:49",
       "outputs": [
-        "data/dataset/trade_dataset.sqlite3",
-        "data/dataset/splits/latest.json",
-        "output/dataset_quality_report.md"
+        "output/fixed_holdings_signals.csv"
       ]
     }
   ],
   "outputs": [
-    "data/dataset/splits/latest.json",
-    "data/dataset/trade_dataset.sqlite3",
-    "output/dataset_quality_report.md"
+    "output/fixed_holdings_signals.csv"
   ],
   "success": true
 }
