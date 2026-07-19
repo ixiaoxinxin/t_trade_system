@@ -119,6 +119,17 @@ v2.6 使用 LightGBM 训练次日涨跌方向分类模型，主标签为 `direct
 
 固定持仓样本池包含融捷股份、云天化、大为股份、神火股份、天齐锂业；这些股票会在卖点信号、午盘验证和次日复盘中置顶。行情缺失时显示待刷新，不写入有效训练标签。
 
+## v2.7 收益目标概率
+
+v2.7 新增 +1%、+2%、-2% 止损概率模型：
+
+```bash
+python main.py probability-train
+python main.py probability-predict
+```
+
+输出文件为 `output/profit_probability_evaluation_v2.7.md` 和 `output/profit_probabilities_v2.7.csv`，SQLite 表为 `profit_probability_training_runs` 和 `profit_probability_predictions`。
+
 ## 常见问题
 
 ### 行情接口失败怎么办？

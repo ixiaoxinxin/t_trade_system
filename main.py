@@ -112,6 +112,19 @@ COMMANDS = {
         "runner": ("direction_model", "run_model_predict"),
         "outputs": ["output/model_predictions_v2.6.csv"],
     },
+    "probability-train": {
+        "description": "训练 v2.7 +1%/+2%/止损概率模型",
+        "runner": ("probability_model", "run_probability_train"),
+        "outputs": [
+            "data/models/profit_probability_model_v2.7.pkl",
+            "output/profit_probability_evaluation_v2.7.md",
+        ],
+    },
+    "probability-predict": {
+        "description": "生成 v2.7 收益目标概率预测",
+        "runner": ("probability_model", "run_probability_predict"),
+        "outputs": ["output/profit_probabilities_v2.7.csv"],
+    },
 }
 
 
@@ -130,7 +143,7 @@ def call_runner(command_name: str, max_count: int | None = None, stock_code: str
 
         if command_name == "candidates":
             runner(max_count=max_count)
-        elif command_name == "model-predict":
+        elif command_name in ["model-predict", "probability-predict"]:
             runner(stock_code=stock_code)
         else:
             runner()
@@ -178,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stock-code",
         default=None,
-        help="仅 model-predict 使用，指定单只股票代码输出预测概率。",
+        help="仅 model-predict/probability-predict 使用，指定单只股票代码输出预测概率。",
     )
 
     return parser

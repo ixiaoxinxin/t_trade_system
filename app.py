@@ -60,6 +60,8 @@ LABEL_SNAPSHOT_FILE = Path("data/dataset/label_snapshot.csv")
 PREDICTION_LOG_FILE = Path("data/dataset/prediction_log.csv")
 MODEL_PREDICTION_FILE = Path("output/model_predictions_v2.6.csv")
 MODEL_EVALUATION_MD_FILE = Path("output/model_evaluation_v2.6.md")
+PROFIT_PROBABILITY_FILE = Path("output/profit_probabilities_v2.7.csv")
+PROFIT_PROBABILITY_EVALUATION_MD_FILE = Path("output/profit_probability_evaluation_v2.7.md")
 FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 
@@ -291,6 +293,50 @@ def add_model_probability(df: pd.DataFrame, prediction_df: pd.DataFrame) -> pd.D
     return merged
 
 
+def add_profit_probability(df: pd.DataFrame, probability_df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or probability_df.empty or "股票代码" not in df.columns:
+        return df
+
+    if "stock_code" not in probability_df.columns:
+        return df
+
+    prob = probability_df.copy()
+    prob["股票代码"] = prob["stock_code"].astype(str).str.zfill(6)
+    prob = prob.sort_values("predict_date").drop_duplicates("股票代码", keep="last")
+    prob = prob.rename(columns={
+        "hit_1pct_probability": "达到1%概率",
+        "hit_2pct_probability": "达到2%概率",
+        "stop_2pct_probability": "止损概率",
+        "risk_adjusted_1pct": "1%风险差",
+        "risk_adjusted_2pct": "2%风险差",
+        "probability_risk_reward": "概率收益风险比",
+        "final_probability_signal": "概率信号",
+    })
+
+    merged = df.merge(
+        prob[
+            [
+                "股票代码",
+                "达到1%概率",
+                "达到2%概率",
+                "止损概率",
+                "1%风险差",
+                "2%风险差",
+                "概率收益风险比",
+                "概率信号",
+            ]
+        ],
+        on="股票代码",
+        how="left",
+    )
+
+    for col in ["达到1%概率", "达到2%概率", "止损概率", "1%风险差", "2%风险差", "概率收益风险比"]:
+        if col in merged.columns:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
+
+    return merged
+
+
 def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -424,7 +470,7 @@ def render_fixed_holding_snapshot(
     st.caption("融捷股份、云天化、大为股份、神火股份、天齐锂业单独成表。先看买点区间和卖点信号，再看午盘/次日结果。")
 
     signal_df = load_csv(FIXED_HOLDINGS_SIGNAL_FILE)
-    signal_df = add_model_probability(signal_df, prediction_df)
+    signal_df = add_profit_probability(add_model_probability(signal_df, prediction_df), profit_probability_df)
 
     if signal_df.empty:
         st.info("暂无固定持仓买卖点，请点击【刷新持仓买卖点】。")
@@ -448,6 +494,10 @@ def render_fixed_holding_snapshot(
                     "次日上涨概率",
                     "方向置信度",
                     "模型方向",
+                    "达到1%概率",
+                    "达到2%概率",
+                    "止损概率",
+                    "概率信号",
                     "日线状态",
                     "分钟状态",
                 ],
@@ -479,7 +529,7 @@ def render_fixed_holding_snapshot(
         return
 
     fixed_df = pd.concat(frames, ignore_index=True)
-    fixed_df = add_model_probability(fixed_df, prediction_df)
+    fixed_df = add_profit_probability(add_model_probability(fixed_df, prediction_df), profit_probability_df)
     show_table(
         "固定持仓验证状态",
         keep_columns(
@@ -493,6 +543,10 @@ def render_fixed_holding_snapshot(
                 "次日上涨概率",
                 "方向置信度",
                 "模型方向",
+                "达到1%概率",
+                "达到2%概率",
+                "止损概率",
+                "概率信号",
                 "卖出信号",
                 "卖出理由",
                 "午盘涨幅",
@@ -580,6 +634,7 @@ lunch_df = load_csv(LUNCH_REVIEW_FILE)
 next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
 model_prediction_df = load_csv(MODEL_PREDICTION_FILE)
+profit_probability_df = load_csv(PROFIT_PROBABILITY_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -590,6 +645,7 @@ lunch_md = load_markdown(LUNCH_REVIEW_MD_FILE)
 next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
 dataset_quality_md = load_markdown(DATASET_QUALITY_REPORT_FILE)
 model_evaluation_md = load_markdown(MODEL_EVALUATION_MD_FILE)
+profit_probability_evaluation_md = load_markdown(PROFIT_PROBABILITY_EVALUATION_MD_FILE)
 
 final_df = mark_fixed_holdings(final_df)
 sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
@@ -797,7 +853,7 @@ def render_trade_plan_panel() -> None:
         trade_df = sorted_final_df.copy()
 
     trade_df = keep_columns(
-        add_model_probability(trade_df, model_prediction_df),
+        add_profit_probability(add_model_probability(trade_df, model_prediction_df), profit_probability_df),
         [
             "固定持仓",
             "置顶原因",
@@ -806,6 +862,11 @@ def render_trade_plan_panel() -> None:
             "次日上涨概率",
             "方向置信度",
             "模型方向",
+            "达到1%概率",
+            "达到2%概率",
+            "止损概率",
+            "概率收益风险比",
+            "概率信号",
             "所属板块",
             "板块数据状态",
             "板块当日资金排名",
@@ -835,13 +896,16 @@ def render_sell_signal_panel() -> None:
         st.warning("暂无卖点信号，有持仓时点击【更新卖点信号】。")
 
     sell_core_df = keep_columns(
-        add_model_probability(sell_signal_df, model_prediction_df),
+        add_profit_probability(add_model_probability(sell_signal_df, model_prediction_df), profit_probability_df),
         [
             "固定持仓",
             "股票代码",
             "股票名称",
             "次日上涨概率",
             "方向置信度",
+            "达到1%概率",
+            "止损概率",
+            "概率信号",
             "市场环境",
             "参考价",
             "分时均价",
@@ -864,13 +928,16 @@ def render_lunch_panel() -> None:
         st.warning("暂无午盘验证报告，请在 11:20 后点击【午盘验证】。")
 
     lunch_core_df = keep_columns(
-        add_model_probability(lunch_df, model_prediction_df),
+        add_profit_probability(add_model_probability(lunch_df, model_prediction_df), profit_probability_df),
         [
             "固定持仓",
             "股票代码",
             "股票名称",
             "次日上涨概率",
             "方向置信度",
+            "达到1%概率",
+            "止损概率",
+            "概率信号",
             "隔夜建议等级",
             "最终评分",
             "午盘涨幅",
@@ -892,13 +959,17 @@ def render_next_day_panel() -> None:
         st.warning("暂无次日验证报告，请次日收盘后点击【次日复盘】。")
 
     next_core_df = keep_columns(
-        add_model_probability(next_df, model_prediction_df),
+        add_profit_probability(add_model_probability(next_df, model_prediction_df), profit_probability_df),
         [
             "固定持仓",
             "股票代码",
             "股票名称",
             "次日上涨概率",
             "方向置信度",
+            "达到1%概率",
+            "达到2%概率",
+            "止损概率",
+            "概率信号",
             "隔夜建议等级",
             "分时结构标签",
             "尾盘抢筹标签",
@@ -991,8 +1062,15 @@ def render_model_training_panel() -> None:
     st.subheader("模型训练")
     st.caption("先保存训练数据，再训练 v2.6 方向模型。这里主要看样本量、标签覆盖和模型评估。")
 
-    if st.button("训练方向模型", width="stretch"):
-        run_main_command_and_refresh("model-train")
+    train_col1, train_col2 = st.columns(2)
+
+    with train_col1:
+        if st.button("训练方向模型", width="stretch"):
+            run_main_command_and_refresh("model-train")
+
+    with train_col2:
+        if st.button("训练收益目标概率模型", width="stretch"):
+            run_main_command_and_refresh("probability-train")
 
     (
         dataset_samples_df,
@@ -1022,6 +1100,12 @@ def render_model_training_panel() -> None:
     else:
         st.info("暂无 v2.6 模型评估报告，请先点击【训练方向模型】。")
 
+    if profit_probability_evaluation_md:
+        with st.expander("展开 v2.7 收益目标概率评估报告", expanded=True):
+            st.markdown(profit_probability_evaluation_md)
+    else:
+        st.info("暂无 v2.7 收益目标概率评估报告，请先点击【训练收益目标概率模型】。")
+
     show_table("样本主表预览", dataset_samples_df.head(20))
 
 
@@ -1029,8 +1113,15 @@ def render_model_prediction_panel() -> None:
     st.subheader("模型预测")
     st.caption("生成候选股票的次日上涨概率和方向置信度，只做辅助排序，不替代规则等级。")
 
-    if st.button("生成模型预测", width="stretch"):
-        run_main_command_and_refresh("model-predict")
+    predict_col1, predict_col2 = st.columns(2)
+
+    with predict_col1:
+        if st.button("生成方向预测", width="stretch"):
+            run_main_command_and_refresh("model-predict")
+
+    with predict_col2:
+        if st.button("生成收益目标概率", width="stretch"):
+            run_main_command_and_refresh("probability-predict")
 
     (
         dataset_samples_df,
@@ -1072,6 +1163,39 @@ def render_model_prediction_panel() -> None:
                 "模型方向",
                 "市场环境",
                 "所属板块",
+                "模型版本",
+            ],
+        ),
+    )
+
+    profit_show_df = profit_probability_df.rename(columns={
+        "stock_code": "股票代码",
+        "stock_name": "股票名称",
+        "hit_1pct_probability": "达到1%概率",
+        "hit_2pct_probability": "达到2%概率",
+        "stop_2pct_probability": "止损概率",
+        "risk_adjusted_1pct": "1%风险差",
+        "risk_adjusted_2pct": "2%风险差",
+        "probability_risk_reward": "概率收益风险比",
+        "final_probability_signal": "概率信号",
+        "model_version": "模型版本",
+        "predict_date": "预测日期",
+    })
+    show_table(
+        "v2.7 收益目标概率排序",
+        keep_columns(
+            profit_show_df,
+            [
+                "预测日期",
+                "股票代码",
+                "股票名称",
+                "达到1%概率",
+                "达到2%概率",
+                "止损概率",
+                "1%风险差",
+                "2%风险差",
+                "概率收益风险比",
+                "概率信号",
                 "模型版本",
             ],
         ),
