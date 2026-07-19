@@ -130,6 +130,14 @@ python main.py probability-predict
 
 输出文件为 `output/profit_probability_evaluation_v2.7.md` 和 `output/profit_probabilities_v2.7.csv`，SQLite 表为 `profit_probability_training_runs` 和 `profit_probability_predictions`。
 
+## v2.8 概率校准与解释
+
+```bash
+python main.py calibrate-explain
+```
+
+输出校准报告、校准后概率和单票多空因素：`output/probability_calibration_v2.8.md`、`output/calibrated_probabilities_v2.8.csv`、`output/model_explanations_v2.8.csv`。
+
 ## 常见问题
 
 ### 行情接口失败怎么办？

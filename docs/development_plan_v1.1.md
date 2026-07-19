@@ -260,6 +260,10 @@ v2.5 默认选择 SQLite。原因是免费、轻量、无需服务、Python 标�
 
 ## 7. v2.8 概率校准与 SHAP 解释
 
+详细需求与实施计划见 `docs/requirements_v2.8_calibration_explain.md`，Obsidian 知识库同步文件为 `10-需求/07-v2.8概率校准与模型解释.md`。
+
+状态：已实现轻量校准与解释第一版，可进入验收。
+
 ### 目标
 
 让模型输出从“分数”变成更可信的概率，并提供单票解释。
@@ -280,6 +284,8 @@ v2.5 默认选择 SQLite。原因是免费、轻量、无需服务、Python 标�
 
 - 概率校准报告可生成。
 - 单只股票可解释为何概率高或低。
+- SQLite 中存在 `probability_calibration_curves` 和 `model_explanations`。
+- 页面可查看校准后概率和单票多空因素。
 - 模型解释不覆盖规则解释，而是并列展示。
 
 ### 风险

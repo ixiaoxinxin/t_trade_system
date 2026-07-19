@@ -62,6 +62,9 @@ MODEL_PREDICTION_FILE = Path("output/model_predictions_v2.6.csv")
 MODEL_EVALUATION_MD_FILE = Path("output/model_evaluation_v2.6.md")
 PROFIT_PROBABILITY_FILE = Path("output/profit_probabilities_v2.7.csv")
 PROFIT_PROBABILITY_EVALUATION_MD_FILE = Path("output/profit_probability_evaluation_v2.7.md")
+CALIBRATED_PROBABILITY_FILE = Path("output/calibrated_probabilities_v2.8.csv")
+MODEL_EXPLANATION_FILE = Path("output/model_explanations_v2.8.csv")
+CALIBRATION_REPORT_FILE = Path("output/probability_calibration_v2.8.md")
 FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 
@@ -635,6 +638,8 @@ next_df = load_csv(NEXT_DAY_REVIEW_FILE)
 factor_df = load_csv(FACTOR_PERFORMANCE_FILE)
 model_prediction_df = load_csv(MODEL_PREDICTION_FILE)
 profit_probability_df = load_csv(PROFIT_PROBABILITY_FILE)
+calibrated_probability_df = load_csv(CALIBRATED_PROBABILITY_FILE)
+model_explanation_df = load_csv(MODEL_EXPLANATION_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -646,6 +651,7 @@ next_md = load_markdown(NEXT_DAY_REVIEW_MD_FILE)
 dataset_quality_md = load_markdown(DATASET_QUALITY_REPORT_FILE)
 model_evaluation_md = load_markdown(MODEL_EVALUATION_MD_FILE)
 profit_probability_evaluation_md = load_markdown(PROFIT_PROBABILITY_EVALUATION_MD_FILE)
+calibration_report_md = load_markdown(CALIBRATION_REPORT_FILE)
 
 final_df = mark_fixed_holdings(final_df)
 sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
@@ -1062,7 +1068,7 @@ def render_model_training_panel() -> None:
     st.subheader("模型训练")
     st.caption("先保存训练数据，再训练 v2.6 方向模型。这里主要看样本量、标签覆盖和模型评估。")
 
-    train_col1, train_col2 = st.columns(2)
+    train_col1, train_col2, train_col3 = st.columns(3)
 
     with train_col1:
         if st.button("训练方向模型", width="stretch"):
@@ -1071,6 +1077,10 @@ def render_model_training_panel() -> None:
     with train_col2:
         if st.button("训练收益目标概率模型", width="stretch"):
             run_main_command_and_refresh("probability-train")
+
+    with train_col3:
+        if st.button("生成校准与解释", width="stretch"):
+            run_main_command_and_refresh("calibrate-explain")
 
     (
         dataset_samples_df,
@@ -1105,6 +1115,12 @@ def render_model_training_panel() -> None:
             st.markdown(profit_probability_evaluation_md)
     else:
         st.info("暂无 v2.7 收益目标概率评估报告，请先点击【训练收益目标概率模型】。")
+
+    if calibration_report_md:
+        with st.expander("展开 v2.8 概率校准与解释报告", expanded=True):
+            st.markdown(calibration_report_md)
+    else:
+        st.info("暂无 v2.8 概率校准与解释报告，请先点击【生成校准与解释】。")
 
     show_table("样本主表预览", dataset_samples_df.head(20))
 
@@ -1197,6 +1213,60 @@ def render_model_prediction_panel() -> None:
                 "概率收益风险比",
                 "概率信号",
                 "模型版本",
+            ],
+        ),
+    )
+
+    calibrated_show_df = calibrated_probability_df.rename(columns={
+        "stock_code": "股票代码",
+        "stock_name": "股票名称",
+        "calibrated_hit_1pct_probability": "校准后1%概率",
+        "calibrated_hit_2pct_probability": "校准后2%概率",
+        "calibrated_stop_2pct_probability": "校准后止损概率",
+        "calibrated_risk_adjusted_1pct": "校准后1%风险差",
+        "calibrated_risk_adjusted_2pct": "校准后2%风险差",
+        "final_probability_signal": "概率信号",
+        "calibration_model_version": "校准版本",
+        "predict_date": "预测日期",
+    })
+    show_table(
+        "v2.8 校准后概率",
+        keep_columns(
+            calibrated_show_df,
+            [
+                "预测日期",
+                "股票代码",
+                "股票名称",
+                "校准后1%概率",
+                "校准后2%概率",
+                "校准后止损概率",
+                "校准后1%风险差",
+                "校准后2%风险差",
+                "概率信号",
+                "校准版本",
+            ],
+        ),
+    )
+
+    explanation_show_df = model_explanation_df.rename(columns={
+        "stock_code": "股票代码",
+        "stock_name": "股票名称",
+        "predict_date": "预测日期",
+        "top_positive_factors": "偏多因素",
+        "top_negative_factors": "偏空因素",
+        "explanation_method": "解释方法",
+    })
+    show_table(
+        "v2.8 单票多空因素",
+        keep_columns(
+            explanation_show_df,
+            [
+                "预测日期",
+                "股票代码",
+                "股票名称",
+                "偏多因素",
+                "偏空因素",
+                "解释方法",
             ],
         ),
     )

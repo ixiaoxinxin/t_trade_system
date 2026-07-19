@@ -125,6 +125,15 @@ COMMANDS = {
         "runner": ("probability_model", "run_probability_predict"),
         "outputs": ["output/profit_probabilities_v2.7.csv"],
     },
+    "calibrate-explain": {
+        "description": "生成 v2.8 概率校准与模型解释",
+        "runner": ("model_calibration", "run_calibration_and_explain"),
+        "outputs": [
+            "output/probability_calibration_v2.8.md",
+            "output/calibrated_probabilities_v2.8.csv",
+            "output/model_explanations_v2.8.csv",
+        ],
+    },
 }
 
 

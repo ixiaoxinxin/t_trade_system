@@ -1,0 +1,29 @@
+{
+  "hit_1pct_after_touch": {
+    "count": 18,
+    "raw_brier": 0.19213,
+    "global_observed_rate": 0.777778,
+    "buckets": {
+      "80-100%": 0.777778
+    },
+    "calibrated_brier": 0.17284
+  },
+  "hit_2pct_after_touch": {
+    "count": 18,
+    "raw_brier": 0.324074,
+    "global_observed_rate": 0.555556,
+    "buckets": {
+      "80-100%": 0.555556
+    },
+    "calibrated_brier": 0.246914
+  },
+  "stop_2pct_after_touch": {
+    "count": 18,
+    "raw_brier": 0.175926,
+    "global_observed_rate": 0.222222,
+    "buckets": {
+      "0-20%": 0.222222
+    },
+    "calibrated_brier": 0.17284
+  }
+}
