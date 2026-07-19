@@ -36,7 +36,14 @@ def load_config() -> dict:
             "single_stock_min": 3000,
             "single_stock_max": 5000,
             "max_trade_count": 2,
-        }
+        },
+        "sector_filter": {
+            "enabled": True,
+            "max_per_sector": 1,
+            "avoid_statuses": ["回避"],
+            "cautious_statuses": ["谨慎"],
+            "cautious_score_penalty": 8,
+        },
     }
 
     return load_yaml_config(CONFIG_FILE, default_config)
@@ -47,6 +54,7 @@ CONFIG = load_config()
 SINGLE_STOCK_MIN = float(CONFIG["capital"]["single_stock_min"])
 SINGLE_STOCK_MAX = float(CONFIG["capital"]["single_stock_max"])
 MAX_TRADE_COUNT = int(CONFIG["capital"]["max_trade_count"])
+SECTOR_FILTER = CONFIG.get("sector_filter", {})
 
 
 def load_market_environment() -> dict:
@@ -109,6 +117,15 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "最新收盘价": df["收盘价"] if "收盘价" in df.columns else 0,
         "今日振幅": df["最近5日振幅"] if "最近5日振幅" in df.columns else 0,
         "风险等级": "中",
+        "所属板块": "",
+        "板块数据状态": "未知",
+        "板块涨跌幅": 0,
+        "主力净流入": 0,
+        "板块当日资金排名": 0,
+        "板块近5日排名": 0,
+        "板块广度": 0,
+        "龙头涨幅": 0,
+        "板块过滤原因": "",
     }
 
     for col, default_value in default_cols.items():
@@ -123,6 +140,12 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "收盘价",
         "最新收盘价",
         "今日振幅",
+        "板块涨跌幅",
+        "主力净流入",
+        "板块当日资金排名",
+        "板块近5日排名",
+        "板块广度",
+        "龙头涨幅",
     ]
 
     for col in numeric_cols:
@@ -243,20 +266,116 @@ def get_position_advice(row: pd.Series) -> str:
     return f"建议 {min_shares}-{max_shares} 股。{reason}"
 
 
+def apply_sector_filter(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or not SECTOR_FILTER.get("enabled", True):
+        return df
+
+    result = df.copy()
+
+    if "板块过滤原因" not in result.columns:
+        result["板块过滤原因"] = ""
+
+    result["板块过滤原因"] = result["板块过滤原因"].fillna("").astype(str)
+
+    status = result["板块数据状态"].fillna("未知").astype(str)
+    avoid_statuses = set(SECTOR_FILTER.get("avoid_statuses", ["回避"]))
+    cautious_statuses = set(SECTOR_FILTER.get("cautious_statuses", ["谨慎"]))
+    penalty = safe_float(SECTOR_FILTER.get("cautious_score_penalty", 8))
+
+    avoid_mask = status.isin(avoid_statuses)
+    result.loc[avoid_mask, "板块过滤原因"] = "板块资金状态回避，不进入交易池。"
+
+    cautious_mask = status.isin(cautious_statuses)
+    result.loc[cautious_mask, "最终评分"] = (result.loc[cautious_mask, "最终评分"] - penalty).clip(lower=0)
+    result.loc[cautious_mask, "板块过滤原因"] = "板块资金状态谨慎，最终评分降权。"
+
+    return result
+
+
+def apply_sector_concentration_limit(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or not SECTOR_FILTER.get("enabled", True):
+        return df
+
+    max_per_sector = int(SECTOR_FILTER.get("max_per_sector", 1))
+
+    if max_per_sector <= 0 or "所属板块" not in df.columns:
+        return df
+
+    result = df.copy()
+
+    if "板块过滤原因" not in result.columns:
+        result["板块过滤原因"] = ""
+
+    result["_sector_name"] = result["所属板块"].fillna("").astype(str)
+    result["_sector_rank"] = (
+        result[result["_sector_name"].ne("")]
+        .groupby("_sector_name")
+        .cumcount()
+        + 1
+    )
+    result["_sector_rank"] = result["_sector_rank"].fillna(0)
+
+    over_limit_mask = (
+        result["隔夜建议等级"].isin(["A", "B"])
+        & result["_sector_name"].ne("")
+        & (result["_sector_rank"] > max_per_sector)
+    )
+
+    result.loc[over_limit_mask, "隔夜建议等级"] = "C"
+    result.loc[over_limit_mask, "板块过滤原因"] = (
+        "同板块候选超过限制，仅保留评分靠前标的；本标的转入观察。"
+    )
+
+    return result.drop(columns=["_sector_name", "_sector_rank"], errors="ignore")
+
+
 def build_plan_row(row: pd.Series) -> dict:
     return {
         "股票代码": normalize_code(row.get("股票代码", "")),
-        "股票名称": str(row.get("股票名称", "")),
+        "股票名称": format_optional_text(row.get("股票名称", "")),
+        "所属板块": format_optional_text(row.get("所属板块", "")),
+        "板块状态": format_optional_text(row.get("板块数据状态", "")),
+        "板块当日排名": format_optional_int(row.get("板块当日资金排名", "")),
+        "板块近5日排名": format_optional_int(row.get("板块近5日排名", "")),
+        "板块广度": format_optional_pct(row.get("板块广度", "")),
+        "龙头涨幅": format_optional_pct(row.get("龙头涨幅", "")),
         "候选评分": f"{safe_float(row.get('候选评分', 0)):.2f}",
         "尾盘评分": f"{safe_float(row.get('尾盘评分', 0)):.2f}",
         "最终评分": f"{safe_float(row.get('最终评分', 0)):.2f}",
-        "风险等级": str(row.get("风险等级", "")),
-        "隔夜等级": str(row.get("隔夜建议等级", "")),
+        "风险等级": format_optional_text(row.get("风险等级", "")),
+        "隔夜等级": format_optional_text(row.get("隔夜建议等级", "")),
         "参考低吸区间": get_low_buy_range(row),
         "止损价": get_stop_loss(row),
         "仓位建议": get_position_advice(row),
-        "隔夜建议说明": str(row.get("隔夜建议说明", "")),
+        "板块过滤原因": format_optional_text(row.get("板块过滤原因", "")),
+        "隔夜建议说明": format_optional_text(row.get("隔夜建议说明", "")),
     }
+
+
+def format_optional_text(value) -> str:
+    if pd.isna(value):
+        return ""
+
+    text = str(value).strip()
+
+    if text.lower() in ["nan", "none", "null"]:
+        return ""
+
+    return text
+
+
+def format_optional_int(value) -> str:
+    number = safe_float(value, default=0)
+    if number <= 0:
+        return "-"
+    return str(int(number))
+
+
+def format_optional_pct(value) -> str:
+    number = safe_float(value, default=0)
+    if number == 0:
+        return "-"
+    return f"{number:.2f}%"
 
 
 def make_markdown_table(rows: list[dict]) -> str:
@@ -266,6 +385,12 @@ def make_markdown_table(rows: list[dict]) -> str:
     headers = [
         "股票代码",
         "股票名称",
+        "所属板块",
+        "板块状态",
+        "板块当日排名",
+        "板块近5日排名",
+        "板块广度",
+        "龙头涨幅",
         "候选评分",
         "尾盘评分",
         "最终评分",
@@ -274,6 +399,7 @@ def make_markdown_table(rows: list[dict]) -> str:
         "参考低吸区间",
         "止损价",
         "仓位建议",
+        "板块过滤原因",
         "隔夜建议说明",
     ]
 
@@ -301,9 +427,13 @@ def filter_trade_pool_by_market(df: pd.DataFrame) -> pd.DataFrame:
         return df[
             (df["隔夜建议等级"] == "A")
             & (df["风险等级"].astype(str).isin(["低", "未知"]))
+            & (~df["板块数据状态"].astype(str).isin(SECTOR_FILTER.get("avoid_statuses", ["回避"])))
         ].copy()
 
-    return df[df["隔夜建议等级"].isin(["A", "B"])].copy()
+    return df[
+        df["隔夜建议等级"].isin(["A", "B"])
+        & (~df["板块数据状态"].astype(str).isin(SECTOR_FILTER.get("avoid_statuses", ["回避"])))
+    ].copy()
 
 
 def generate_daily_plan() -> None:
@@ -314,10 +444,14 @@ def generate_daily_plan() -> None:
 
     df = ensure_columns(df)
 
+    df = apply_sector_filter(df)
+
     df = df.sort_values(
         by=["隔夜建议等级", "最终评分"],
         ascending=[True, False]
     ).reset_index(drop=True)
+
+    df = apply_sector_concentration_limit(df)
 
     trade_df = filter_trade_pool_by_market(df)
     watch_df = df[df["隔夜建议等级"] == "C"].copy()
@@ -373,6 +507,8 @@ def generate_daily_plan() -> None:
 - 低吸区间不到，不开仓
 - 跌破止损价，不补仓，先退出
 - 高开冲高优先兑现，不恋战
+- 可靠板块状态为 `回避` 的标的不进入交易池
+- 同一板块最多进入 `{int(SECTOR_FILTER.get("max_per_sector", 1))}` 只
 
 ---
 

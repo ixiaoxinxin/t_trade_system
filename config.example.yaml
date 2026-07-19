@@ -33,6 +33,15 @@ runtime:
   enable_cache: true
   cache_dir: cache
 
+sector_filter:
+  enabled: true
+  max_per_sector: 1
+  avoid_statuses:
+    - 回避
+  cautious_statuses:
+    - 谨慎
+  cautious_score_penalty: 8
+
 market_environment:
   top_sector_count: 10
   avoid_sector_count: 10

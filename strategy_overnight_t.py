@@ -27,6 +27,7 @@ import yaml
 
 from data_provider import get_all_stocks, get_stock_daily
 from common import PRODUCT_VERSION, normalize_code
+from sector_mapper import enrich_candidates_with_sector, print_sector_stats
 
 
 CONFIG_FILE = Path("config.yaml")
@@ -751,6 +752,18 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
         "股票代码",
         "股票名称",
         "所属市场",
+        "所属板块",
+        "板块映射来源",
+        "板块涨跌幅",
+        "主力净流入",
+        "主力净流入占比",
+        "板块当日资金排名",
+        "板块近5日排名",
+        "板块近5日平均涨幅",
+        "板块广度",
+        "龙头涨幅",
+        "板块数据状态",
+        "隔夜建议",
         "最新收盘价",
         "MA5",
         "距MA5偏离率",
@@ -799,10 +812,16 @@ def run_strategy(max_count: int | None = None) -> pd.DataFrame:
     print(f"开始运行 A股隔日T选股系统 v{PRODUCT_VERSION}")
     print(f"运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    candidates_df, _stock_df = scan_overnight_t_stocks(max_count=max_count)
+    candidates_df, stock_df = scan_overnight_t_stocks(max_count=max_count)
+
+    candidates_df, sector_stats = enrich_candidates_with_sector(
+        candidates_df=candidates_df,
+        stock_df=stock_df,
+    )
 
     candidates_df = reorder_columns(candidates_df)
 
+    print_sector_stats(sector_stats)
     print_score_stats(candidates_df)
 
     print("\n隔日T候选股票：")

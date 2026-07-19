@@ -472,6 +472,12 @@ def build_markdown(df: pd.DataFrame) -> str:
         cols = [
             "股票代码",
             "股票名称",
+            "所属板块",
+            "板块数据状态",
+            "板块当日资金排名",
+            "板块近5日排名",
+            "板块广度",
+            "龙头涨幅",
             "候选评分",
             "尾盘评分",
             "最终评分",
@@ -572,6 +578,25 @@ def run_tail_confirmation(top_n: int = TOP_N) -> None:
             "候选评分": candidate_score,
             "风险等级": row_dict.get("风险等级", "未知"),
         }
+
+        passthrough_cols = [
+            "所属板块",
+            "板块映射来源",
+            "板块涨跌幅",
+            "主力净流入",
+            "主力净流入占比",
+            "板块当日资金排名",
+            "板块近5日排名",
+            "板块近5日平均涨幅",
+            "板块广度",
+            "龙头涨幅",
+            "板块数据状态",
+            "隔夜建议",
+        ]
+
+        for col in passthrough_cols:
+            if col in row_dict:
+                result[col] = row_dict.get(col)
 
         result.update(intraday_fields)
         result = calculate_tail_metrics(result)

@@ -1,6 +1,6 @@
 {
   "product_version": "2.0",
-  "generated_at": "2026-07-18 23:35:28",
+  "generated_at": "2026-07-19 10:59:11",
   "command": "plan",
   "config_summary": {
     "max_count": null
@@ -10,8 +10,8 @@
       "name": "plan",
       "description": "生成明日交易计划",
       "success": true,
-      "started_at": "2026-07-18 23:35:28",
-      "finished_at": "2026-07-18 23:35:28",
+      "started_at": "2026-07-19 10:59:11",
+      "finished_at": "2026-07-19 10:59:11",
       "outputs": [
         "output/daily_plan.md"
       ]
