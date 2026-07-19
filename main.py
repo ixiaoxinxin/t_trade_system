@@ -143,6 +143,14 @@ COMMANDS = {
             "output/prediction_review_v2.9.md",
         ],
     },
+    "decision-fusion": {
+        "description": "生成 v3.0 规则评分与模型概率融合决策",
+        "runner": ("decision_fusion", "run_decision_fusion"),
+        "outputs": [
+            "output/final_decision_v3.0.csv",
+            "output/final_decision_v3.0.md",
+        ],
+    },
 }
 
 
