@@ -28,6 +28,7 @@ TRADE_RECORD_COLUMNS = [
     "数量",
     "买入手续费",
     "卖出手续费",
+    "卖出印花税",
     "手续费合计",
     "到手利润",
     "收益率",
@@ -41,6 +42,7 @@ ALLOWED_TRADE_TYPES = {"日内T", "隔日T"}
 ALLOWED_DIRECTIONS = {"买入", "卖出", "买入并卖出"}
 COMMISSION_RATE = 0.00025
 MIN_COMMISSION = 5.0
+SELL_STAMP_TAX_RATE = 0.0005
 
 DB_TO_CN_COLUMNS = {
     "record_id": "记录ID",
@@ -55,6 +57,7 @@ DB_TO_CN_COLUMNS = {
     "quantity": "数量",
     "buy_commission": "买入手续费",
     "sell_commission": "卖出手续费",
+    "sell_stamp_tax": "卖出印花税",
     "total_commission": "手续费合计",
     "net_profit": "到手利润",
     "return_rate": "收益率",
@@ -72,6 +75,13 @@ def calculate_commission(amount: float) -> float:
         return 0.0
 
     return round(max(amount * COMMISSION_RATE, MIN_COMMISSION), 2)
+
+
+def calculate_sell_stamp_tax(amount: float) -> float:
+    if amount <= 0:
+        return 0.0
+
+    return round(amount * SELL_STAMP_TAX_RATE, 2)
 
 
 def ensure_trade_record_table() -> None:
@@ -92,6 +102,7 @@ def ensure_trade_record_table() -> None:
                 quantity INTEGER,
                 buy_commission REAL,
                 sell_commission REAL,
+                sell_stamp_tax REAL,
                 total_commission REAL,
                 net_profit REAL,
                 return_rate REAL,
@@ -101,6 +112,11 @@ def ensure_trade_record_table() -> None:
                 note TEXT
             )
         """)
+        existing_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(trade_records)").fetchall()
+        }
+        if "sell_stamp_tax" not in existing_columns:
+            conn.execute("ALTER TABLE trade_records ADD COLUMN sell_stamp_tax REAL")
         conn.commit()
 
 
@@ -141,12 +157,12 @@ def append_trade_record_to_sqlite(record: dict) -> pd.DataFrame:
             INSERT OR REPLACE INTO trade_records
             (record_id, recorded_at, trade_date, trade_type, stock_code, stock_name,
              direction, buy_price, sell_price, quantity, buy_commission, sell_commission,
-             total_commission, net_profit, return_rate, closed_status, strategy_source,
+             sell_stamp_tax, total_commission, net_profit, return_rate, closed_status, strategy_source,
              followed_plan, note)
             VALUES
             (:record_id, :recorded_at, :trade_date, :trade_type, :stock_code, :stock_name,
              :direction, :buy_price, :sell_price, :quantity, :buy_commission, :sell_commission,
-             :total_commission, :net_profit, :return_rate, :closed_status, :strategy_source,
+             :sell_stamp_tax, :total_commission, :net_profit, :return_rate, :closed_status, :strategy_source,
              :followed_plan, :note)
             """,
             db_record,
@@ -162,11 +178,12 @@ def calculate_net_profit(
     quantity: int,
     buy_commission: float = 0.0,
     sell_commission: float = 0.0,
+    sell_stamp_tax: float = 0.0,
 ) -> tuple[float, float]:
     if buy_price <= 0 or sell_price <= 0 or quantity <= 0:
         return 0.0, 0.0
 
-    profit = (sell_price - buy_price) * quantity - buy_commission - sell_commission
+    profit = (sell_price - buy_price) * quantity - buy_commission - sell_commission - sell_stamp_tax
     profit_rate = profit / (buy_price * quantity) * 100
 
     return round(profit, 2), round(profit_rate, 2)
@@ -219,7 +236,8 @@ def build_trade_record(
 
     buy_commission = calculate_commission(buy * shares)
     sell_commission = calculate_commission(sell * shares) if sell > 0 else 0.0
-    total_commission = round(buy_commission + sell_commission, 2)
+    sell_stamp_tax = calculate_sell_stamp_tax(sell * shares) if sell > 0 else 0.0
+    total_commission = round(buy_commission + sell_commission + sell_stamp_tax, 2)
 
     profit = ""
     profit_rate = ""
@@ -232,6 +250,7 @@ def build_trade_record(
             quantity=shares,
             buy_commission=buy_commission,
             sell_commission=sell_commission,
+            sell_stamp_tax=sell_stamp_tax,
         )
         closed_status = "已闭环"
 
@@ -255,6 +274,7 @@ def build_trade_record(
         "数量": shares,
         "买入手续费": buy_commission,
         "卖出手续费": sell_commission if sell > 0 else "",
+        "卖出印花税": sell_stamp_tax if sell > 0 else "",
         "手续费合计": total_commission,
         "到手利润": profit,
         "收益率": profit_rate,

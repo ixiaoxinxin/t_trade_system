@@ -453,7 +453,7 @@ def make_final_decision_table(decision_df: pd.DataFrame, *, fixed_only: bool | N
 
     work = work.sort_values(["is_fixed_holding", "fusion_score"], ascending=[False, False]).head(limit)
 
-    headers = ["股票", "固定持仓", "最终操作", "融合分", "上涨概率", "+1%概率", "止损概率", "风险收益比", "解释"]
+    headers = ["操作", "股票", "规则", "关注分", "一句话原因"]
     lines = [
         "| " + " | ".join(headers) + " |",
         "| " + " | ".join(["---"] * len(headers)) + " |",
@@ -463,14 +463,10 @@ def make_final_decision_table(decision_df: pd.DataFrame, *, fixed_only: bool | N
         lines.append(
             "| "
             + " | ".join([
-                f"{normalize_code(row.get('stock_code', ''))} {format_optional_text(row.get('stock_name', ''))}",
-                "是" if str(row.get("is_fixed_holding", "")).lower() in ["true", "1"] else "否",
                 format_optional_text(row.get("final_action", "")),
+                f"{normalize_code(row.get('stock_code', ''))} {format_optional_text(row.get('stock_name', ''))}",
+                format_optional_text(row.get("rule_grade", "")),
                 f"{safe_float(row.get('fusion_score', 0)):.1f}",
-                f"{safe_float(row.get('next_day_up_probability', 0)):.1%}",
-                f"{safe_float(row.get('hit_1pct_probability', 0)):.1%}",
-                f"{safe_float(row.get('stop_2pct_probability', 0)):.1%}",
-                format_optional_text(row.get("risk_reward_ratio", "")),
                 format_optional_text(row.get("decision_reason", "")),
             ])
             + " |"

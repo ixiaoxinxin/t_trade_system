@@ -24,8 +24,15 @@ import pandas as pd
 import streamlit as st
 
 from fixed_holdings import fixed_holding_codes, fixed_holding_name_map, mark_fixed_holdings, sort_fixed_holdings_first
+from common import normalize_code
 from sqlite_store import load_dataframe, load_document, migrate_local_files_to_sqlite
-from trade_journal import append_trade_record, build_trade_record, load_trade_records
+from trade_journal import (
+    append_trade_record,
+    build_trade_record,
+    calculate_commission,
+    calculate_sell_stamp_tax,
+    load_trade_records,
+)
 
 
 # =========================
@@ -241,6 +248,140 @@ def keep_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 
     existing = [col for col in columns if col in df.columns]
     return df[existing].copy()
+
+
+def parse_price_input(value: str) -> float:
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return 0.0
+    return float(text)
+
+
+def build_stock_name_code_map(*frames: pd.DataFrame) -> dict[str, str]:
+    mapping = {name: code for code, name in fixed_holding_name_map().items()}
+
+    for frame in frames:
+        if frame.empty:
+            continue
+
+        code_col = "股票代码" if "股票代码" in frame.columns else "stock_code" if "stock_code" in frame.columns else ""
+        name_col = "股票名称" if "股票名称" in frame.columns else "stock_name" if "stock_name" in frame.columns else ""
+        if not code_col or not name_col:
+            continue
+
+        for _, row in frame.iterrows():
+            name = str(row.get(name_col, "")).strip()
+            code = normalize_code(row.get(code_col, ""))
+            if name and code:
+                mapping.setdefault(name, code)
+
+    return mapping
+
+
+def model_has_variation(df: pd.DataFrame, columns: list[str]) -> bool:
+    for col in columns:
+        if col not in df.columns:
+            continue
+        unique_count = pd.to_numeric(df[col], errors="coerce").dropna().round(6).nunique()
+        if unique_count > 1:
+            return True
+    return False
+
+
+def add_model_signal_status(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    result = df.copy()
+    columns = [
+        "次日上涨概率",
+        "方向置信度",
+        "达到1%概率",
+        "达到2%概率",
+        "止损概率",
+    ]
+    result["模型状态"] = "有区分" if model_has_variation(result, columns) else "仅观察"
+    return result
+
+
+def short_action_text(action: str, *, fixed: bool = False) -> str:
+    action = str(action).strip()
+    fixed_text = {
+        "继续持有": "继续持有：暂未触发卖点。",
+        "减仓": "减仓：风险升高，先降仓位。",
+        "止盈": "止盈：收益已到，先落袋。",
+        "清仓": "清仓：卖点触发，先退出。",
+        "止损": "止损：跌破风控，立即退出。",
+    }
+    candidate_text = {
+        "优先低吸": "优先低吸：只等计划买点。",
+        "小仓观察": "小仓观察：可看，不追。",
+        "只观察": "只观察：条件不够，先不买。",
+        "放弃": "放弃：风险不划算。",
+    }
+
+    if fixed and action in fixed_text:
+        return fixed_text[action]
+    if action in candidate_text:
+        return candidate_text[action]
+    if action in fixed_text:
+        return fixed_text[action]
+    return action or "暂无操作。"
+
+
+def add_short_reason(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "最终操作" not in df.columns:
+        return df
+
+    result = df.copy()
+    fixed_series = result.get("固定持仓", pd.Series(["否"] * len(result), index=result.index))
+    result["操作短句"] = [
+        short_action_text(action, fixed=str(fixed).lower() in ["true", "1", "是"])
+        for action, fixed in zip(result["最终操作"], fixed_series)
+    ]
+    return result
+
+
+def add_verification_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    result = df.copy()
+
+    def row_status(row: pd.Series) -> str:
+        execution = str(row.get("执行验证结果", "")).strip()
+        success = str(row.get("是否验证成功", "")).strip()
+        touched = str(row.get("是否触达低吸区间", "")).strip()
+        hit_1 = str(row.get("是否达到1%", "")).strip()
+        stop = str(row.get("是否触发-2%止损", "")).strip()
+
+        if "数据" in execution or "不足" in execution:
+            return "数据不足"
+        if touched == "否":
+            return "未给买点"
+        if success == "是" or hit_1 == "是":
+            return "计划有效"
+        if stop == "是" or touched == "是":
+            return "计划待优化"
+        return "数据不足"
+
+    text_map = {
+        "计划有效": "计划有效：给了买点，达到目标。",
+        "计划待优化": "待优化：给了买点，但收益不足或风险先到。",
+        "未给买点": "未给买点：计划没有成交机会。",
+        "数据不足": "数据不足：今天不参与判断。",
+    }
+    result["系统验证结果"] = result.apply(row_status, axis=1)
+    result["复盘结论"] = result["系统验证结果"].map(text_map).fillna(result["系统验证结果"])
+    return result
+
+
+def split_fixed_candidate(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if df.empty or "固定持仓" not in df.columns:
+        return pd.DataFrame(), df.copy()
+
+    fixed_mask = df["固定持仓"].astype(str).str.lower().isin(["true", "1", "是"])
+    return df[fixed_mask].copy(), df[~fixed_mask].copy()
 
 
 def load_bought_codes(trade_record_df: pd.DataFrame) -> set[str]:
@@ -522,34 +663,25 @@ def render_fixed_holding_snapshot(
     if signal_df.empty:
         st.info("暂无固定持仓买卖点，请点击【刷新持仓买卖点】。")
     else:
+        signal_df = add_short_reason(add_model_signal_status(signal_df))
         show_table(
             "固定持仓买点 / 卖点",
             keep_columns(
                 signal_df,
                 [
-                    "刷新时间",
-                    "股票代码",
-                    "股票名称",
                     "最终操作",
-                    "融合评分",
-                    "操作解释",
-                    "当前价",
-                    "买点下限",
-                    "买点上限",
-                    "买点状态",
+                    "股票名称",
+                    "股票代码",
+                    "操作短句",
                     "卖点信号",
                     "卖点理由",
-                    "当前涨幅",
-                    "高点回撤",
-                    "次日上涨概率",
-                    "方向置信度",
-                    "模型方向",
-                    "达到1%概率",
-                    "达到2%概率",
-                    "止损概率",
-                    "概率信号",
+                    "买点状态",
+                    "买点下限",
+                    "买点上限",
+                    "当前价",
                     "日线状态",
                     "分钟状态",
+                    "模型状态",
                 ],
             ),
         )
@@ -581,34 +713,25 @@ def render_fixed_holding_snapshot(
     fixed_df = pd.concat(frames, ignore_index=True)
     fixed_df = add_profit_probability(add_model_probability(fixed_df, prediction_df), profit_probability_df)
     fixed_df = add_final_decision(fixed_df, final_decision_df)
+    fixed_df = add_short_reason(add_model_signal_status(add_verification_summary(fixed_df)))
     show_table(
         "固定持仓验证状态",
         keep_columns(
             fixed_df,
             [
-                "来源",
-                "股票代码",
-                "股票名称",
-                "固定持仓",
                 "最终操作",
-                "融合评分",
-                "操作解释",
-                "行情刷新状态",
-                "次日上涨概率",
-                "方向置信度",
-                "模型方向",
-                "达到1%概率",
-                "达到2%概率",
-                "止损概率",
-                "概率信号",
+                "股票名称",
+                "股票代码",
+                "操作短句",
+                "来源",
                 "卖出信号",
                 "卖出理由",
                 "午盘涨幅",
+                "系统验证结果",
+                "复盘结论",
                 "上午结构标签",
                 "下午操作建议",
-                "次日收盘涨幅",
-                "执行验证结果",
-                "是否验证成功",
+                "模型状态",
             ],
         ),
     )
@@ -736,7 +859,17 @@ st.divider()
 
 def render_trade_record_panel() -> None:
     st.subheader("交易记录")
-    st.caption("只记录日内T / 隔日T。手续费按招行证券万2.5、单笔最低5元自动计算，卖出后同步生成到手利润。")
+    st.caption("只记录日内T / 隔日T。佣金按招行证券万2.5、单笔最低5元；卖出另扣印花税。")
+
+    name_code_map = build_stock_name_code_map(
+        final_df,
+        final_decision_df,
+        sell_signal_df,
+        lunch_df,
+        next_df,
+        model_prediction_df,
+        profit_probability_df,
+    )
 
     with st.form("trade_record_form", clear_on_submit=True):
         row1_col1, row1_col2, row1_col3, row1_col4 = st.columns([1, 1, 1, 1])
@@ -748,10 +881,10 @@ def render_trade_record_panel() -> None:
             trade_type = st.selectbox("交易类型", ["隔日T", "日内T"])
 
         with row1_col3:
-            stock_code = st.text_input("股票代码", placeholder="例如 002378")
+            stock_name = st.text_input("股票名称", placeholder="例如 天齐锂业")
 
         with row1_col4:
-            stock_name = st.text_input("股票名称", placeholder="例如 章源钨业")
+            stock_code = st.text_input("股票代码（可选）", placeholder="留空时按股票名称匹配")
 
         row2_col1, row2_col2, row2_col3, row2_col4 = st.columns([1, 1, 1, 1])
 
@@ -759,25 +892,38 @@ def render_trade_record_panel() -> None:
             direction = st.selectbox("方向", ["买入并卖出", "买入", "卖出"])
 
         with row2_col2:
-            buy_price = st.number_input("买入价格/成本价", min_value=0.0, value=0.0, step=0.01, format="%.3f")
+            buy_price_text = st.text_input("买入价格/成本价", placeholder="例如 46.99")
 
         with row2_col3:
-            sell_price = st.number_input("卖出价格", min_value=0.0, value=0.0, step=0.01, format="%.3f")
+            sell_price_text = st.text_input("卖出价格", placeholder="例如 48.20；未卖出可空")
 
         with row2_col4:
             quantity = st.number_input("数量", min_value=0, value=100, step=100)
 
-        preview_buy_amount = buy_price * quantity
-        preview_sell_amount = sell_price * quantity
-        preview_buy_fee = max(preview_buy_amount * 0.00025, 5) if preview_buy_amount > 0 else 0
-        preview_sell_fee = max(preview_sell_amount * 0.00025, 5) if preview_sell_amount > 0 else 0
-        preview_total_fee = preview_buy_fee + preview_sell_fee
+        try:
+            buy_price = parse_price_input(buy_price_text)
+            sell_price = parse_price_input(sell_price_text)
+            preview_buy_amount = buy_price * quantity
+            preview_sell_amount = sell_price * quantity
+            preview_buy_fee = calculate_commission(preview_buy_amount)
+            preview_sell_fee = calculate_commission(preview_sell_amount) if preview_sell_amount > 0 else 0
+            preview_stamp_tax = calculate_sell_stamp_tax(preview_sell_amount) if preview_sell_amount > 0 else 0
+            preview_total_fee = preview_buy_fee + preview_sell_fee + preview_stamp_tax
+        except ValueError:
+            buy_price = 0.0
+            sell_price = 0.0
+            preview_buy_fee = 0.0
+            preview_sell_fee = 0.0
+            preview_stamp_tax = 0.0
+            preview_total_fee = 0.0
+            st.warning("价格只能输入数字，例如 46.99。")
 
         if sell_price > 0 and buy_price > 0 and quantity > 0:
             preview_profit = (sell_price - buy_price) * quantity - preview_total_fee
             preview_return = preview_profit / preview_buy_amount * 100 if preview_buy_amount > 0 else 0
             st.caption(
-                f"预估手续费：{preview_total_fee:.2f} 元；"
+                f"预估费用：{preview_total_fee:.2f} 元"
+                f"（买佣 {preview_buy_fee:.2f}，卖佣 {preview_sell_fee:.2f}，印花税 {preview_stamp_tax:.2f}）；"
                 f"预估到手利润：{preview_profit:.2f} 元；"
                 f"收益率：{preview_return:.2f}%"
             )
@@ -797,8 +943,12 @@ def render_trade_record_panel() -> None:
 
         if submitted:
             try:
+                resolved_code = normalize_code(stock_code)
+                if not resolved_code:
+                    resolved_code = name_code_map.get(str(stock_name).strip(), "")
+
                 record = build_trade_record(
-                    stock_code=stock_code,
+                    stock_code=resolved_code,
                     stock_name=stock_name,
                     trade_date=trade_date,
                     trade_type=trade_type,
@@ -852,21 +1002,21 @@ def render_trade_record_summary() -> None:
         keep_columns(
             recent_trade_df,
             [
-                "记录时间",
-                "交易日期",
-                "交易类型",
-                "股票代码",
+                "闭环状态",
                 "股票名称",
+                "股票代码",
+                "交易类型",
                 "方向",
                 "买入价格",
                 "卖出价格",
                 "数量",
-                "买入手续费",
-                "卖出手续费",
-                "手续费合计",
                 "到手利润",
                 "收益率",
-                "闭环状态",
+                "买入手续费",
+                "卖出手续费",
+                "卖出印花税",
+                "手续费合计",
+                "交易日期",
                 "策略来源",
                 "是否按计划执行",
                 "备注",
@@ -901,7 +1051,7 @@ def render_market_panel() -> None:
 
 def render_trade_plan_panel() -> None:
     st.subheader("明日计划")
-    st.caption("生成明日计划会自动串起市场环境、候选扫描、尾盘确认和交易计划。日常只看 A/B 候选。")
+    st.caption("这里只看明天怎么做。固定持仓看处理动作，候选池看是否值得关注。")
 
     if st.button("刷新最终决策", key="refresh_final_decision", width="stretch"):
         run_main_command_and_refresh("decision-fusion")
@@ -922,26 +1072,56 @@ def render_trade_plan_panel() -> None:
             "decision_reason": "操作解释",
             "risk_reward_ratio": "风险收益比",
         })
+        final_show_df["固定持仓"] = final_show_df["固定持仓"].map({True: "是", False: "否", "True": "是", "False": "否"}).fillna(final_show_df["固定持仓"])
+        final_show_df = add_short_reason(add_model_signal_status(final_show_df))
+        fixed_decision_df, candidate_decision_df = split_fixed_candidate(final_show_df)
+
         show_table(
-            "最终操作",
+            "固定持仓处理",
             keep_columns(
-                final_show_df,
+                fixed_decision_df,
                 [
-                    "固定持仓",
-                    "股票代码",
-                    "股票名称",
                     "最终操作",
-                    "融合评分",
+                    "股票名称",
+                    "股票代码",
+                    "操作短句",
                     "规则等级",
-                    "次日上涨概率",
-                    "达到1%概率",
-                    "达到2%概率",
-                    "止损概率",
-                    "风险收益比",
-                    "操作解释",
+                    "模型状态",
+                ],
+            ),
+        )
+        show_table(
+            "明日候选池",
+            keep_columns(
+                candidate_decision_df,
+                [
+                    "最终操作",
+                    "股票名称",
+                    "股票代码",
+                    "操作短句",
+                    "规则等级",
+                    "融合评分",
+                    "模型状态",
                 ],
             ).head(12),
         )
+        with st.expander("展开模型依据明细", expanded=False):
+            show_table(
+                "模型依据明细",
+                keep_columns(
+                    final_show_df,
+                    [
+                        "股票名称",
+                        "股票代码",
+                        "次日上涨概率",
+                        "达到1%概率",
+                        "达到2%概率",
+                        "止损概率",
+                        "风险收益比",
+                        "模型状态",
+                    ],
+                ).head(30),
+            )
     else:
         st.info("暂无最终决策，请先运行模型预测后点击【刷新最终决策】。")
 
@@ -969,31 +1149,17 @@ def render_trade_plan_panel() -> None:
             final_decision_df,
         ),
         [
-            "固定持仓",
-            "置顶原因",
-            "股票代码",
-            "股票名称",
             "最终操作",
-            "融合评分",
+            "股票名称",
+            "股票代码",
             "操作解释",
-            "风险收益比",
-            "次日上涨概率",
-            "方向置信度",
-            "模型方向",
-            "达到1%概率",
-            "达到2%概率",
-            "止损概率",
-            "概率收益风险比",
-            "概率信号",
-            "所属板块",
-            "板块数据状态",
-            "板块当日资金排名",
-            "板块近5日排名",
-            "板块广度",
-            "龙头涨幅",
-            "风险等级",
             "隔夜建议等级",
-            "最终评分",
+            "融合评分",
+            "是否已买入",
+            "固定持仓",
+            "所属板块",
+            "风险等级",
+            "模型状态",
             "分时结构标签",
             "尾盘抢筹标签",
             "板块过滤原因",
@@ -1001,6 +1167,23 @@ def render_trade_plan_panel() -> None:
         ],
     )
     trade_df = add_bought_flag(trade_df, bought_codes)
+    trade_df = add_short_reason(add_model_signal_status(trade_df))
+    trade_df = keep_columns(
+        trade_df,
+        [
+            "最终操作",
+            "股票名称",
+            "股票代码",
+            "操作短句",
+            "隔夜建议等级",
+            "融合评分",
+            "是否已买入",
+            "固定持仓",
+            "模型状态",
+            "所属板块",
+            "风险等级",
+        ],
+    )
     show_table("A/B 核心候选", trade_df)
 
 
@@ -1016,20 +1199,15 @@ def render_sell_signal_panel() -> None:
     sell_core_df = keep_columns(
         add_profit_probability(add_model_probability(sell_signal_df, model_prediction_df), profit_probability_df),
         [
-            "固定持仓",
-            "股票代码",
+            "卖出信号",
             "股票名称",
-            "次日上涨概率",
-            "方向置信度",
-            "达到1%概率",
-            "止损概率",
-            "概率信号",
-            "市场环境",
+            "股票代码",
+            "卖出理由",
             "参考价",
             "分时均价",
             "盘中最高",
-            "卖出信号",
-            "卖出理由",
+            "市场环境",
+            "固定持仓",
         ],
     )
     sell_core_df = add_bought_flag(sell_core_df, bought_codes)
@@ -1048,19 +1226,13 @@ def render_lunch_panel() -> None:
     lunch_core_df = keep_columns(
         add_profit_probability(add_model_probability(lunch_df, model_prediction_df), profit_probability_df),
         [
-            "固定持仓",
-            "股票代码",
-            "股票名称",
-            "次日上涨概率",
-            "方向置信度",
-            "达到1%概率",
-            "止损概率",
-            "概率信号",
-            "隔夜建议等级",
-            "最终评分",
-            "午盘涨幅",
-            "上午结构标签",
             "下午操作建议",
+            "股票名称",
+            "股票代码",
+            "上午结构标签",
+            "午盘涨幅",
+            "隔夜建议等级",
+            "固定持仓",
         ],
     )
     lunch_core_df = add_bought_flag(lunch_core_df, bought_codes)
@@ -1069,6 +1241,7 @@ def render_lunch_panel() -> None:
 
 def render_next_day_panel() -> None:
     st.subheader("系统次日验证")
+    st.caption("这里只看昨天计划准不准，用于复盘和训练数据，不直接指导今天买卖。")
 
     if next_md:
         with st.expander("展开次日验证原始报告", expanded=False):
@@ -1080,40 +1253,71 @@ def render_next_day_panel() -> None:
         add_profit_probability(add_model_probability(next_df, model_prediction_df), profit_probability_df),
         [
             "固定持仓",
-            "股票代码",
             "股票名称",
-            "次日上涨概率",
-            "方向置信度",
-            "达到1%概率",
-            "达到2%概率",
-            "止损概率",
-            "概率信号",
+            "股票代码",
+            "是否触达低吸区间",
+            "是否达到1%",
+            "是否触发-2%止损",
+            "执行验证结果",
+            "是否验证成功",
+            "次日收盘涨幅",
             "隔夜建议等级",
             "分时结构标签",
             "尾盘抢筹标签",
             "买入参考价",
             "计划低吸下限",
             "计划低吸上限",
-            "次日收盘涨幅",
-            "是否触达低吸区间",
-            "执行验证结果",
-            "是否达到1%",
-            "是否达到2%",
-            "是否触发-2%止损",
-            "是否验证成功",
         ],
     )
     next_core_df = add_bought_flag(next_core_df, bought_codes)
+    next_core_df = add_verification_summary(next_core_df)
 
-    if not next_core_df.empty and "是否验证成功" in next_core_df.columns:
-        success_df = next_core_df[next_core_df["是否验证成功"].astype(str).eq("是")].copy()
-        failed_df = next_core_df[~next_core_df["是否验证成功"].astype(str).eq("是")].copy()
-    else:
-        success_df = pd.DataFrame()
-        failed_df = next_core_df.copy()
+    if next_core_df.empty:
+        st.info("暂无系统次日验证结果。")
+        return
 
-    show_table("验证成功", success_df)
-    show_table("验证失败 / 待优化", failed_df)
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    with metric_col1:
+        st.metric("计划有效", int(next_core_df["系统验证结果"].eq("计划有效").sum()))
+    with metric_col2:
+        st.metric("待优化", int(next_core_df["系统验证结果"].eq("计划待优化").sum()))
+    with metric_col3:
+        st.metric("未给买点", int(next_core_df["系统验证结果"].eq("未给买点").sum()))
+    with metric_col4:
+        st.metric("固定持仓", int(next_core_df["固定持仓"].astype(str).isin(["是", "True", "true", "1"]).sum()))
+
+    fixed_review_df, candidate_review_df = split_fixed_candidate(next_core_df)
+    core_columns = [
+        "系统验证结果",
+        "股票名称",
+        "股票代码",
+        "复盘结论",
+        "是否触达低吸区间",
+        "是否达到1%",
+        "是否触发-2%止损",
+    ]
+
+    show_table("固定持仓验证", keep_columns(fixed_review_df, core_columns))
+    show_table("候选池验证", keep_columns(candidate_review_df, core_columns))
+
+    with st.expander("展开验证明细", expanded=False):
+        show_table(
+            "验证明细",
+            keep_columns(
+                next_core_df,
+                core_columns
+                + [
+                    "隔夜建议等级",
+                    "分时结构标签",
+                    "尾盘抢筹标签",
+                    "买入参考价",
+                    "计划低吸下限",
+                    "计划低吸上限",
+                    "次日收盘涨幅",
+                    "执行验证结果",
+                ],
+            ),
+        )
 
 
 def render_factor_panel() -> None:
@@ -1310,6 +1514,9 @@ def render_model_prediction_panel() -> None:
                 "常见原因是样本太少、标签分布单一，或模型回退到整体基准概率。"
                 "这种情况下先把它当作风险提示，最终仍以规则评分、卖点信号和单票决策为准。"
             )
+            model_show_df["模型状态"] = "仅观察"
+        else:
+            model_show_df["模型状态"] = "有区分"
 
     show_table(
         "次日上涨概率排序",
@@ -1317,8 +1524,9 @@ def render_model_prediction_panel() -> None:
             model_show_df,
             [
                 "预测日期",
-                "股票代码",
                 "股票名称",
+                "股票代码",
+                "模型状态",
                 "次日上涨概率",
                 "方向置信度",
                 "模型方向",
@@ -1341,14 +1549,23 @@ def render_model_prediction_panel() -> None:
         "model_version": "模型版本",
         "predict_date": "预测日期",
     })
+    if not profit_show_df.empty:
+        profit_show_df["模型状态"] = "有区分" if model_has_variation(
+            profit_show_df,
+            ["达到1%概率", "达到2%概率", "止损概率"],
+        ) else "仅观察"
+        if profit_show_df["模型状态"].eq("仅观察").all():
+            st.warning("收益目标概率当前也没有形成有效区分，不适合作为候选排序依据。")
+
     show_table(
         "收益目标概率排序",
         keep_columns(
             profit_show_df,
             [
                 "预测日期",
-                "股票代码",
                 "股票名称",
+                "股票代码",
+                "模型状态",
                 "达到1%概率",
                 "达到2%概率",
                 "止损概率",
@@ -1489,41 +1706,54 @@ def render_single_stock_panel() -> None:
             "sell_signal": "卖点信号",
             "sell_reason": "卖点理由",
         })
+        show_df = add_short_reason(add_model_signal_status(show_df))
         show_table(
             "单票核心结论",
             keep_columns(
                 show_df,
                 [
-                    "股票代码",
-                    "股票名称",
-                    "固定持仓",
                     "最终操作",
-                    "融合评分",
-                    "规则等级",
-                    "次日上涨概率",
-                    "达到1%概率",
-                    "达到2%概率",
-                    "止损概率",
+                    "股票名称",
+                    "股票代码",
+                    "操作短句",
                     "买点状态",
                     "买点区间",
                     "卖点信号",
                     "卖点理由",
-                    "操作解释",
+                    "规则等级",
+                    "模型状态",
                 ],
             ),
         )
+        with st.expander("展开单票模型明细", expanded=False):
+            show_table(
+                "单票模型明细",
+                keep_columns(
+                    show_df,
+                    [
+                        "股票名称",
+                        "股票代码",
+                        "融合评分",
+                        "次日上涨概率",
+                        "达到1%概率",
+                        "达到2%概率",
+                        "止损概率",
+                    ],
+                ),
+            )
 
     if single_stock_decision_md:
         with st.expander("展开单票决策报告", expanded=False):
             st.markdown(single_stock_decision_md)
 
 
-tab_plan, tab_holdings, tab_single_stock, tab_trade_records, tab_lunch, tab_model_train, tab_model_predict = st.tabs([
+tab_plan, tab_holdings, tab_single_stock, tab_trade_records, tab_lunch, tab_next_day, tab_model_train, tab_model_predict = st.tabs([
     "明日计划",
     "固定持仓",
     "单票决策",
     "交易记录",
     "午盘验证",
+    "系统次日验证",
     "模型训练",
     "模型预测",
 ])
@@ -1536,8 +1766,6 @@ with tab_plan:
         render_factor_panel()
 
     render_trade_plan_panel()
-    st.divider()
-    render_next_day_panel()
 
 
 with tab_holdings:
@@ -1579,6 +1807,13 @@ with tab_lunch:
         run_single_script_and_refresh("lunch_validator.py")
 
     render_lunch_panel()
+
+
+with tab_next_day:
+    if st.button("刷新系统次日验证", key="tab_refresh_next_day", width="stretch"):
+        run_single_script_and_refresh("next_day_validator.py")
+
+    render_next_day_panel()
 
 
 with tab_model_train:

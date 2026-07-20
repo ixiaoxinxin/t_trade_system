@@ -183,19 +183,28 @@ def risk_reward_text(p1: float, p2: float, p_stop: float) -> str:
 
 
 def explain_decision(row: pd.Series) -> str:
-    parts = [
-        f"规则{row.get('rule_grade', '未评级')}({safe_float(row.get('rule_score', 0)):.0f})",
-        f"上涨{safe_float(row.get('next_day_up_probability', 0.5)):.0%}",
-        f"+1% {safe_float(row.get('hit_1pct_probability', 0.5)):.0%}",
-        f"止损{safe_float(row.get('stop_2pct_probability', 0.5)):.0%}",
-        f"板块{row.get('sector_status', '未知')}",
-    ]
     action = str(row.get("final_action", ""))
-    if action in ["放弃", "减仓", "止损"]:
-        parts.append("以风控为先")
-    elif action in ["优先低吸", "小仓观察"]:
-        parts.append("只低吸不追高")
-    return "；".join(parts)
+    fixed = bool(row.get("is_fixed_holding", False))
+
+    fixed_text = {
+        "继续持有": "继续持有：暂未触发卖点。",
+        "减仓": "减仓：风险升高，先降仓位。",
+        "止盈": "止盈：收益已到，先落袋。",
+        "清仓": "清仓：卖点触发，先退出。",
+        "止损": "止损：跌破风控，立即退出。",
+    }
+    candidate_text = {
+        "优先低吸": "优先低吸：只等计划买点。",
+        "小仓观察": "小仓观察：可看，不追。",
+        "只观察": "只观察：条件不够，先不买。",
+        "放弃": "放弃：风险不划算。",
+    }
+
+    if fixed and action in fixed_text:
+        return fixed_text[action]
+    if action in candidate_text:
+        return candidate_text[action]
+    return fixed_text.get(action, action or "暂无操作。")
 
 
 def build_base_universe(
@@ -364,28 +373,58 @@ def write_final_decision_report(decision_df: pd.DataFrame) -> None:
         for action, count in decision_df["final_action"].value_counts().items():
             lines.append(f"| {action} | {int(count)} |")
 
+    def append_core_table(title: str, frame: pd.DataFrame) -> None:
+        lines.extend([
+            "",
+            f"## {title}",
+            "",
+            "| 操作 | 股票 | 规则 | 关注分 | 一句话原因 |",
+            "|---|---|---|---:|---|",
+        ])
+
+        if frame.empty:
+            lines.append("| 无 | - | - | - | - |")
+            return
+
+        for _, row in frame.head(15).iterrows():
+            lines.append(
+                f"| {row['final_action']} | "
+                f"{row['stock_name']} `{row['stock_code']}` | "
+                f"{row['rule_grade']} | {safe_float(row['fusion_score']):.1f} | "
+                f"{row['decision_reason']} |"
+            )
+
+    if decision_df.empty:
+        fixed_df = pd.DataFrame()
+        candidate_df = pd.DataFrame()
+    else:
+        fixed_df = decision_df[decision_df["is_fixed_holding"].astype(bool)].copy()
+        candidate_df = decision_df[~decision_df["is_fixed_holding"].astype(bool)].copy()
+
+    append_core_table("二、固定持仓处理", fixed_df)
+    append_core_table("三、明日候选池", candidate_df)
+
     lines.extend([
         "",
-        "## 二、核心决策",
+        "## 四、模型依据明细",
         "",
-        "| 股票 | 固定持仓 | 规则 | 融合分 | 上涨概率 | +1%概率 | 止损概率 | 最终操作 | 理由 |",
-        "|---|---|---|---:|---:|---:|---:|---|---|",
+        "| 股票 | 上涨概率 | +1%概率 | +2%概率 | 止损概率 | 风险收益比 |",
+        "|---|---:|---:|---:|---:|---:|",
     ])
 
     for _, row in decision_df.head(30).iterrows():
         lines.append(
             f"| {row['stock_code']} {row['stock_name']} | "
-            f"{'是' if row['is_fixed_holding'] else '否'} | "
-            f"{row['rule_grade']} | {safe_float(row['fusion_score']):.1f} | "
             f"{safe_float(row['next_day_up_probability']):.1%} | "
             f"{safe_float(row['hit_1pct_probability']):.1%} | "
+            f"{safe_float(row['hit_2pct_probability']):.1%} | "
             f"{safe_float(row['stop_2pct_probability']):.1%} | "
-            f"{row['final_action']} | {row['decision_reason']} |"
+            f"{row['risk_reward_ratio']} |"
         )
 
     lines.extend([
         "",
-        "## 三、融合原则",
+        "## 五、融合原则",
         "",
         "- 规则等级决定能不能做，模型概率决定值不值得加大关注。",
         "- D 级不会因为模型概率高而升级为买入。",
