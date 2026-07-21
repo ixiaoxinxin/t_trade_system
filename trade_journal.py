@@ -203,8 +203,10 @@ def build_trade_record(
     followed_plan: str = "未记录",
     note: str = "",
     recorded_at: datetime | None = None,
+    record_id: str | None = None,
 ) -> dict:
-    code = normalize_code(stock_code)
+    raw_code = str(stock_code).strip()
+    code = normalize_code(raw_code) if raw_code else ""
     name = str(stock_name).strip()
     buy = safe_float(buy_price)
     sell = safe_float(sell_price)
@@ -259,10 +261,10 @@ def build_trade_record(
     else:
         trade_date_text = str(trade_date).strip()
 
-    record_id = f"{now.strftime('%Y%m%d%H%M%S')}_{code}_{trade_type_text}_{direction_text}"
+    next_record_id = str(record_id).strip() if record_id else f"{now.strftime('%Y%m%d%H%M%S')}_{code}_{trade_type_text}_{direction_text}"
 
     return {
-        "记录ID": record_id,
+        "记录ID": next_record_id,
         "记录时间": now.strftime("%Y-%m-%d %H:%M:%S"),
         "交易日期": trade_date_text,
         "交易类型": trade_type_text,
@@ -319,6 +321,30 @@ def append_trade_record(record: dict, path: Path = TRADE_RECORD_FILE) -> pd.Data
         next_df = record_df.copy()
     else:
         next_df = pd.concat([existing, record_df], ignore_index=True)
+
+    next_df = next_df[TRADE_RECORD_COLUMNS]
+    next_df.to_csv(path, index=False, encoding="utf-8-sig")
+
+    return next_df
+
+
+def update_trade_record(record: dict, path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
+    record_id = str(record.get("记录ID", "")).strip()
+    if not record_id:
+        raise ValueError("记录ID不能为空")
+
+    if default_sqlite_enabled(path):
+        return append_trade_record_to_sqlite(record)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_trade_records(path)
+    record_df = pd.DataFrame([record])
+
+    if existing.empty:
+        next_df = record_df.copy()
+    else:
+        next_df = existing[existing["记录ID"].astype(str) != record_id].copy()
+        next_df = pd.concat([next_df, record_df], ignore_index=True)
 
     next_df = next_df[TRADE_RECORD_COLUMNS]
     next_df.to_csv(path, index=False, encoding="utf-8-sig")

@@ -24,7 +24,7 @@ import pandas as pd
 import streamlit as st
 
 from fixed_holdings import fixed_holding_codes, fixed_holding_name_map, mark_fixed_holdings, sort_fixed_holdings_first
-from common import normalize_code
+from common import normalize_code, safe_float
 from sqlite_store import load_dataframe, load_document, migrate_local_files_to_sqlite
 from trade_journal import (
     append_trade_record,
@@ -32,6 +32,7 @@ from trade_journal import (
     calculate_commission,
     calculate_sell_stamp_tax,
     load_trade_records,
+    update_trade_record,
 )
 
 
@@ -276,6 +277,14 @@ def build_stock_name_code_map(*frames: pd.DataFrame) -> dict[str, str]:
                 mapping.setdefault(name, code)
 
     return mapping
+
+
+def resolve_trade_stock_code(stock_name: str, stock_code: str, name_code_map: dict[str, str]) -> str:
+    raw_code = str(stock_code).strip()
+    if raw_code:
+        return normalize_code(raw_code)
+
+    return name_code_map.get(str(stock_name).strip(), "")
 
 
 def model_has_variation(df: pd.DataFrame, columns: list[str]) -> bool:
@@ -946,9 +955,7 @@ def render_trade_record_panel() -> None:
 
         if submitted:
             try:
-                resolved_code = normalize_code(stock_code)
-                if not resolved_code:
-                    resolved_code = name_code_map.get(str(stock_name).strip(), "")
+                resolved_code = resolve_trade_stock_code(stock_name, stock_code, name_code_map)
 
                 record = build_trade_record(
                     stock_code=resolved_code,
@@ -999,6 +1006,8 @@ def render_trade_record_summary() -> None:
     with metric_col4:
         st.metric("平均收益率", f"{avg_return.mean():.2f}%" if not avg_return.empty else "-")
 
+    render_trade_record_editor(current_trade_df)
+
     recent_trade_df = current_trade_df.sort_values("记录时间", ascending=False).head(30)
     show_table(
         "最近交易记录",
@@ -1026,6 +1035,177 @@ def render_trade_record_summary() -> None:
             ],
         ),
     )
+
+
+def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
+    name_code_map = build_stock_name_code_map(
+        final_df,
+        final_decision_df,
+        sell_signal_df,
+        lunch_df,
+        next_df,
+        model_prediction_df,
+        profit_probability_df,
+        current_trade_df,
+    )
+    editable_df = current_trade_df.copy()
+    editable_df["记录ID"] = editable_df["记录ID"].astype(str)
+    editable_df = editable_df[editable_df["记录ID"].str.strip().ne("")]
+
+    if editable_df.empty:
+        return
+
+    editable_df = editable_df.sort_values("记录时间", ascending=False).reset_index(drop=True)
+    record_options = editable_df["记录ID"].tolist()
+    label_map = {
+        row["记录ID"]: (
+            f"{row.get('交易日期', '')} | {row.get('股票名称', '')} | "
+            f"{row.get('买入价格', '')}->{row.get('卖出价格', '')} | "
+            f"{row.get('数量', '')}股 | {row.get('闭环状态', '')}"
+        )
+        for _, row in editable_df.iterrows()
+    }
+
+    with st.expander("修改已保存记录", expanded=False):
+        selected_id = st.selectbox(
+            "选择要修改的记录",
+            record_options,
+            format_func=lambda record_id: label_map.get(record_id, record_id),
+        )
+        selected_row = editable_df[editable_df["记录ID"].eq(selected_id)].iloc[0]
+
+        trade_date_value = pd.to_datetime(selected_row.get("交易日期", ""), errors="coerce")
+        if pd.isna(trade_date_value):
+            trade_date_value = pd.Timestamp.today()
+
+        recorded_at_value = pd.to_datetime(selected_row.get("记录时间", ""), errors="coerce")
+        recorded_at = recorded_at_value.to_pydatetime() if not pd.isna(recorded_at_value) else None
+
+        trade_type_options = ["隔日T", "日内T"]
+        direction_options = ["买入并卖出", "买入", "卖出"]
+        strategy_options = ["系统候选", "手动观察", "盘中机会", "复盘补录"]
+        followed_options = ["是", "否", "部分执行", "未记录"]
+
+        with st.form("trade_record_edit_form"):
+            row1_col1, row1_col2, row1_col3, row1_col4 = st.columns([1, 1, 1, 1])
+
+            with row1_col1:
+                edit_trade_date = st.date_input("交易日期", value=trade_date_value.date(), key="edit_trade_date")
+
+            with row1_col2:
+                current_trade_type = str(selected_row.get("交易类型", "隔日T"))
+                edit_trade_type = st.selectbox(
+                    "交易类型",
+                    trade_type_options,
+                    index=trade_type_options.index(current_trade_type) if current_trade_type in trade_type_options else 0,
+                    key="edit_trade_type",
+                )
+
+            with row1_col3:
+                edit_stock_name = st.text_input(
+                    "股票名称",
+                    value=str(selected_row.get("股票名称", "")),
+                    key="edit_stock_name",
+                )
+
+            with row1_col4:
+                stored_code = str(selected_row.get("股票代码", "")).strip()
+                if stored_code == "000000":
+                    stored_code = ""
+                edit_stock_code = st.text_input(
+                    "股票代码（可选）",
+                    value=stored_code,
+                    key="edit_stock_code",
+                )
+
+            row2_col1, row2_col2, row2_col3, row2_col4 = st.columns([1, 1, 1, 1])
+
+            with row2_col1:
+                current_direction = str(selected_row.get("方向", "买入并卖出"))
+                edit_direction = st.selectbox(
+                    "方向",
+                    direction_options,
+                    index=direction_options.index(current_direction) if current_direction in direction_options else 0,
+                    key="edit_direction",
+                )
+
+            with row2_col2:
+                edit_buy_price_text = st.text_input(
+                    "买入价格/成本价",
+                    value=str(selected_row.get("买入价格", "")).strip(),
+                    key="edit_buy_price",
+                )
+
+            with row2_col3:
+                edit_sell_price_text = st.text_input(
+                    "卖出价格",
+                    value=str(selected_row.get("卖出价格", "")).strip(),
+                    key="edit_sell_price",
+                )
+
+            with row2_col4:
+                edit_quantity = st.number_input(
+                    "数量",
+                    min_value=0,
+                    value=int(safe_float(selected_row.get("数量", 0))),
+                    step=100,
+                    key="edit_quantity",
+                )
+
+            row3_col1, row3_col2 = st.columns([1, 1])
+
+            with row3_col1:
+                current_strategy = str(selected_row.get("策略来源", "手动观察"))
+                edit_strategy_source = st.selectbox(
+                    "策略来源",
+                    strategy_options,
+                    index=strategy_options.index(current_strategy) if current_strategy in strategy_options else 1,
+                    key="edit_strategy_source",
+                )
+
+            with row3_col2:
+                current_followed = str(selected_row.get("是否按计划执行", "未记录"))
+                edit_followed_plan = st.selectbox(
+                    "是否按计划执行",
+                    followed_options,
+                    index=followed_options.index(current_followed) if current_followed in followed_options else 3,
+                    key="edit_followed_plan",
+                )
+
+            edit_note = st.text_area(
+                "备注",
+                value=str(selected_row.get("备注", "")),
+                height=90,
+                key="edit_note",
+            )
+            update_submitted = st.form_submit_button("保存修改", width="stretch")
+
+            if update_submitted:
+                try:
+                    edit_buy_price = parse_price_input(edit_buy_price_text)
+                    edit_sell_price = parse_price_input(edit_sell_price_text)
+                    resolved_code = resolve_trade_stock_code(edit_stock_name, edit_stock_code, name_code_map)
+                    record = build_trade_record(
+                        record_id=selected_id,
+                        stock_code=resolved_code,
+                        stock_name=edit_stock_name,
+                        trade_date=edit_trade_date,
+                        trade_type=edit_trade_type,
+                        direction=edit_direction,
+                        buy_price=edit_buy_price,
+                        sell_price=edit_sell_price,
+                        quantity=edit_quantity,
+                        strategy_source=edit_strategy_source,
+                        followed_plan=edit_followed_plan,
+                        note=edit_note,
+                        recorded_at=recorded_at,
+                    )
+                    update_trade_record(record, TRADE_RECORD_FILE)
+                    st.success("交易记录已修改，费用和利润已重新计算")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"修改失败：{e}")
 
 
 def render_market_panel() -> None:

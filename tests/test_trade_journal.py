@@ -13,6 +13,7 @@ from trade_journal import (
     calculate_commission,
     calculate_sell_stamp_tax,
     load_trade_records,
+    update_trade_record,
 )
 
 
@@ -72,6 +73,42 @@ class TradeJournalTest(unittest.TestCase):
             self.assertEqual(df.iloc[0]["股票代码"], "000960")
             self.assertEqual(df.iloc[0]["闭环状态"], "未闭环")
 
+    def test_update_trade_record_replaces_existing_record(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "trade_records.csv"
+            record = build_trade_record(
+                record_id="record-1",
+                stock_code="002466",
+                stock_name="天齐锂业",
+                trade_date="2026-07-21",
+                trade_type="日内T",
+                direction="买入并卖出",
+                buy_price=42,
+                sell_price=43,
+                quantity=100,
+                recorded_at=datetime(2026, 7, 21, 10, 0, 0),
+            )
+            append_trade_record(record, path)
+
+            updated = build_trade_record(
+                record_id="record-1",
+                stock_code="002466",
+                stock_name="天齐锂业",
+                trade_date="2026-07-21",
+                trade_type="日内T",
+                direction="买入并卖出",
+                buy_price=42,
+                sell_price=44,
+                quantity=100,
+                recorded_at=datetime(2026, 7, 21, 10, 0, 0),
+            )
+            df = update_trade_record(updated, path)
+
+            self.assertEqual(len(df), 1)
+            self.assertEqual(df.iloc[0]["记录ID"], "record-1")
+            self.assertEqual(df.iloc[0]["卖出价格"], 44)
+            self.assertEqual(df.iloc[0]["到手利润"], 187.8)
+
     def test_rejects_non_t_trade_type(self):
         with self.assertRaises(ValueError):
             build_trade_record(
@@ -81,6 +118,19 @@ class TradeJournalTest(unittest.TestCase):
                 trade_type="建仓",
                 direction="买入",
                 buy_price=45.2,
+                quantity=100,
+            )
+
+    def test_rejects_empty_stock_code_without_saving_as_zero_code(self):
+        with self.assertRaises(ValueError):
+            build_trade_record(
+                stock_code="",
+                stock_name="融捷股份",
+                trade_date="2026-07-21",
+                trade_type="日内T",
+                direction="买入并卖出",
+                buy_price=56,
+                sell_price=57,
                 quantity=100,
             )
 
