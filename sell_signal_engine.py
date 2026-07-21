@@ -20,7 +20,7 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from data_provider import get_stock_minute
+from data_provider import get_stock_minute, get_stock_realtime_quote
 from common import load_yaml_config, normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
 from fixed_holdings import enrich_watchlist_with_fixed_holdings
@@ -262,7 +262,16 @@ def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
     fixed_reason = str(row.get("置顶原因", ""))
     refresh_status = str(row.get("行情刷新状态", ""))
 
+    quote = get_stock_realtime_quote(symbol)
+    quote_current_price = safe_float(quote.get("最新价", 0))
+    quote_high_price = safe_float(quote.get("最高", 0))
+    quote_low_price = safe_float(quote.get("最低", 0))
+    quote_previous_close = safe_float(quote.get("昨收", 0))
+    quote_status = str(quote.get("数据源", "")).strip()
+
     reference_price = get_reference_price(row)
+    if reference_price <= 0 and quote_previous_close > 0:
+        reference_price = quote_previous_close
 
     if reference_price <= 0:
         if fixed_flag == "是":
@@ -272,7 +281,7 @@ def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
                 "股票名称": name,
                 "固定持仓": fixed_flag,
                 "置顶原因": fixed_reason,
-                "行情刷新状态": refresh_status or "参考价为空",
+                "行情刷新状态": refresh_status or quote_status or "参考价为空",
                 "隔夜等级": row.get("隔夜建议等级", "持仓"),
                 "市场环境": str(market_env.get("市场环境", "未知")),
                 "参考价": 0,
@@ -299,7 +308,7 @@ def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
 
     minute_df = get_today_minute_data(symbol)
 
-    if minute_df.empty:
+    if minute_df.empty and quote_current_price <= 0:
         if fixed_flag == "是":
             return {
                 "生成时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -307,7 +316,7 @@ def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
                 "股票名称": name,
                 "固定持仓": fixed_flag,
                 "置顶原因": fixed_reason,
-                "行情刷新状态": refresh_status or "分钟数据为空",
+                "行情刷新状态": refresh_status or quote_status or "分钟数据为空",
                 "隔夜等级": row.get("隔夜建议等级", "持仓"),
                 "市场环境": str(market_env.get("市场环境", "未知")),
                 "参考价": round(reference_price, 2),
@@ -332,10 +341,21 @@ def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
         print(f"{symbol} {name} 分钟数据为空，跳过")
         return None
 
-    current_price = safe_float(minute_df["close"].iloc[-1])
-    high_price = safe_float(minute_df["high"].max())
-    low_price = safe_float(minute_df["low"].min())
-    avg_price = calculate_vwap_like_price(minute_df)
+    if minute_df.empty:
+        current_price = quote_current_price
+        high_price = quote_high_price or quote_current_price
+        low_price = quote_low_price or quote_current_price
+        avg_price = quote_current_price
+        minute_status = quote_status or "实时行情已刷新"
+    else:
+        minute_current_price = safe_float(minute_df["close"].iloc[-1])
+        minute_high_price = safe_float(minute_df["high"].max())
+        minute_low_price = safe_float(minute_df["low"].min())
+        current_price = quote_current_price or minute_current_price
+        high_price = quote_high_price or minute_high_price
+        low_price = quote_low_price or minute_low_price
+        avg_price = calculate_vwap_like_price(minute_df)
+        minute_status = refresh_status or quote_status or "分钟已刷新"
 
     current_pct = (current_price - reference_price) / reference_price * 100
     max_pct = (high_price - reference_price) / reference_price * 100
@@ -372,7 +392,7 @@ def build_sell_signal_row(row: pd.Series, market_env: dict) -> dict | None:
         "股票名称": name,
         "固定持仓": fixed_flag,
         "置顶原因": fixed_reason,
-        "行情刷新状态": refresh_status or "分钟已刷新",
+        "行情刷新状态": minute_status,
         "隔夜等级": grade,
         "市场环境": env,
         "参考价": round(reference_price, 2),

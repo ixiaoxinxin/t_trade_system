@@ -370,6 +370,84 @@ def get_all_stocks() -> pd.DataFrame:
     return pd.DataFrame(columns=["代码", "名称", "最新价", "涨跌幅", "成交额", "数据源"])
 
 
+def parse_sina_realtime_quote_text(text: str, code: str) -> dict:
+    """
+    解析新浪单票实时行情。
+
+    新浪字段顺序：名称、今开、昨收、最新、最高、最低、买一、卖一、成交量、成交额...
+    """
+
+    match = re.search(r'="(.*)"', text.strip())
+    if not match:
+        raise ValueError(f"新浪实时行情格式异常：{code}")
+
+    parts = match.group(1).split(",")
+    if len(parts) < 32 or not parts[0]:
+        raise ValueError(f"新浪实时行情为空：{code}")
+
+    trade_date = parts[30] if len(parts) > 30 else ""
+    trade_time = parts[31] if len(parts) > 31 else ""
+    previous_close = safe_float(parts[2])
+    current_price = safe_float(parts[3])
+
+    if current_price <= 0:
+        current_price = previous_close
+
+    pct_chg = 0.0
+    if previous_close > 0 and current_price > 0:
+        pct_chg = (current_price / previous_close - 1) * 100
+
+    return {
+        "代码": normalize_code(code),
+        "名称": parts[0],
+        "今开": safe_float(parts[1]),
+        "昨收": previous_close,
+        "最新价": current_price,
+        "最高": safe_float(parts[4]),
+        "最低": safe_float(parts[5]),
+        "买一": safe_float(parts[6]),
+        "卖一": safe_float(parts[7]),
+        "成交量": safe_float(parts[8]),
+        "成交额": safe_float(parts[9]),
+        "涨跌幅": pct_chg,
+        "行情日期": trade_date,
+        "行情时间": trade_time,
+        "数据源": "新浪实时",
+    }
+
+
+def get_stock_realtime_quote_sina(symbol: str) -> dict:
+    """
+    获取单票实时行情，不读写缓存。
+    """
+
+    code = normalize_code(symbol)
+    sina_symbol = to_sina_symbol(code)
+    url = f"https://hq.sinajs.cn/list={sina_symbol}"
+
+    response = request_get(url, timeout=5)
+    quote = parse_sina_realtime_quote_text(response.text, code)
+    log_source("新浪实时")
+    return quote
+
+
+def get_stock_realtime_quote(symbol: str) -> dict:
+    """
+    统一获取单票实时行情。
+
+    当前优先使用新浪 hq 接口。失败时返回空 dict，由调用方继续使用分钟线或日线兜底。
+    """
+
+    code = normalize_code(symbol)
+
+    try:
+        return get_stock_realtime_quote_sina(code)
+    except Exception as e:
+        DATA_STATS["失败次数"] += 1
+        print(f"{code} 实时行情失败：{e}")
+        return {}
+
+
 # =========================================================
 # 二、日线数据
 # =========================================================

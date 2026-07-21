@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from common import normalize_code, safe_float
-from data_provider import get_stock_daily, get_stock_minute
+from data_provider import get_stock_daily, get_stock_minute, get_stock_realtime_quote
 
 
 FIXED_HOLDINGS = [
@@ -184,6 +184,8 @@ def run_fixed_holding_trade_signals() -> pd.DataFrame:
         current_price = 0.0
         day_high = 0.0
         day_low = 0.0
+        quote_status = "实时未刷新"
+        quote_time = ""
 
         try:
             daily_df = standardize_daily(get_stock_daily(code))
@@ -194,10 +196,25 @@ def run_fixed_holding_trade_signals() -> pd.DataFrame:
             daily_df = pd.DataFrame()
             daily_status = f"失败：{exc}"
 
+        quote = get_stock_realtime_quote(code)
+        if quote:
+            quote_status = str(quote.get("数据源", "实时已刷新"))
+            quote_time = " ".join(
+                part
+                for part in [str(quote.get("行情日期", "")).strip(), str(quote.get("行情时间", "")).strip()]
+                if part
+            )
+            current_price = safe_float(quote.get("最新价", 0))
+            day_high = safe_float(quote.get("最高", 0)) or current_price
+            day_low = safe_float(quote.get("最低", 0)) or current_price
+            quote_previous_close = safe_float(quote.get("昨收", 0))
+            if quote_previous_close > 0:
+                reference_price = quote_previous_close
+
         try:
             minute_df = standardize_minute(get_stock_minute(code, period="1"))
             minute_status = "成功" if not minute_df.empty else "分钟为空"
-            if not minute_df.empty:
+            if not minute_df.empty and current_price <= 0:
                 latest_date = minute_df["datetime"].dt.date.max() if "datetime" in minute_df.columns else None
                 today_minute = minute_df[minute_df["datetime"].dt.date.eq(latest_date)].copy() if latest_date else minute_df
                 current_price = safe_float(today_minute["close"].iloc[-1])
@@ -222,6 +239,7 @@ def run_fixed_holding_trade_signals() -> pd.DataFrame:
             "固定持仓": "是",
             "参考价": round(reference_price, 3) if reference_price else "",
             "当前价": round(current_price, 3) if current_price else "",
+            "实时行情时间": quote_time,
             "日内最高": round(day_high, 3) if day_high else "",
             "日内最低": round(day_low, 3) if day_low else "",
             "买点下限": round(buy_low, 3) if buy_low else "",
@@ -233,6 +251,7 @@ def run_fixed_holding_trade_signals() -> pd.DataFrame:
             "当前涨幅": current_pct,
             "高点回撤": pullback_pct,
             "日线状态": daily_status,
+            "实时状态": quote_status,
             "分钟状态": minute_status,
         })
 
@@ -253,6 +272,11 @@ def refresh_fixed_holding_market_data() -> pd.DataFrame:
         daily_status = "未刷新"
         minute_status = "未刷新"
         reference_price = 0.0
+        current_price = 0.0
+        day_high = 0.0
+        day_low = 0.0
+        quote_status = "实时未刷新"
+        quote_time = ""
         minute_rows = 0
 
         try:
@@ -262,6 +286,21 @@ def refresh_fixed_holding_market_data() -> pd.DataFrame:
                 reference_price = latest_daily_reference(code)[0]
         except Exception as exc:
             daily_status = f"失败：{exc}"
+
+        quote = get_stock_realtime_quote(code)
+        if quote:
+            quote_status = str(quote.get("数据源", "实时已刷新"))
+            quote_time = " ".join(
+                part
+                for part in [str(quote.get("行情日期", "")).strip(), str(quote.get("行情时间", "")).strip()]
+                if part
+            )
+            current_price = safe_float(quote.get("最新价", 0))
+            day_high = safe_float(quote.get("最高", 0)) or current_price
+            day_low = safe_float(quote.get("最低", 0)) or current_price
+            quote_previous_close = safe_float(quote.get("昨收", 0))
+            if quote_previous_close > 0:
+                reference_price = quote_previous_close
 
         try:
             minute_df = get_stock_minute(code, period="1")
@@ -275,7 +314,12 @@ def refresh_fixed_holding_market_data() -> pd.DataFrame:
             "股票代码": code,
             "股票名称": name,
             "参考价": round(reference_price, 3) if reference_price else "",
+            "当前价": round(current_price, 3) if current_price else "",
+            "日内最高": round(day_high, 3) if day_high else "",
+            "日内最低": round(day_low, 3) if day_low else "",
+            "实时行情时间": quote_time,
             "日线状态": daily_status,
+            "实时状态": quote_status,
             "分钟状态": minute_status,
             "分钟行数": minute_rows,
             "固定持仓": "是",
