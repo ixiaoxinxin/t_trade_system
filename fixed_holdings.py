@@ -109,15 +109,8 @@ def standardize_minute(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def calculate_buy_zone(daily_df: pd.DataFrame, reference_price: float) -> tuple[float, float, str]:
-    if daily_df is not None and not daily_df.empty and "close" in daily_df.columns:
-        close_series = pd.to_numeric(daily_df["close"], errors="coerce").dropna()
-
-        if len(close_series) >= 5:
-            ma5 = float(close_series.tail(5).mean())
-            return ma5 * 0.99, ma5 * 1.01, "MA5上下1%"
-
     if reference_price > 0:
-        return reference_price * 0.98, reference_price * 0.99, "收盘价回撤1%-2%"
+        return reference_price * 0.98, reference_price * 0.99, "昨收回撤1%-2%"
 
     return 0.0, 0.0, "数据不足"
 
@@ -127,15 +120,15 @@ def classify_buy_status(current_price: float, buy_low: float, buy_high: float, r
         return "待刷新"
 
     if buy_low <= current_price <= buy_high:
-        return "进入买点区"
+        return "进入回补区"
 
     if current_price < buy_low:
-        return "低于买点区，等企稳"
+        return "跌破回补区，先等止跌"
 
     if reference_price > 0 and current_price >= reference_price * 1.01:
-        return "偏离买点，不追"
+        return "高于回补区，不追"
 
-    return "高于买点，等回落"
+    return "高于回补区，等回落"
 
 
 def build_signal_watchlist_row(stock_code: str, stock_name: str, reference_price: float) -> pd.Series:
