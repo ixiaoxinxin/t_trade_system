@@ -143,6 +143,11 @@ COMMANDS = {
             "output/prediction_review_v2.9.md",
         ],
     },
+    "daily-report": {
+        "description": "生成今日模型与预测复盘报告",
+        "runner": ("daily_model_report", "build_daily_model_report"),
+        "outputs": ["output/daily_model_report.md"],
+    },
     "decision-fusion": {
         "description": "生成 v3.0 规则评分与模型概率融合决策",
         "runner": ("decision_fusion", "run_decision_fusion"),

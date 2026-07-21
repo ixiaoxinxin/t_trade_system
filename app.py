@@ -32,6 +32,7 @@ from trade_journal import (
     calculate_commission,
     calculate_sell_stamp_tax,
     load_trade_records,
+    normalize_optional_code,
     update_trade_record,
 )
 
@@ -76,6 +77,7 @@ CALIBRATION_REPORT_FILE = Path("output/probability_calibration_v2.8.md")
 PREDICTION_REVIEW_FILE = Path("output/prediction_review_v2.9.csv")
 MODEL_SCORECARD_FILE = Path("output/model_scorecard_v2.9.csv")
 PREDICTION_REVIEW_REPORT_FILE = Path("output/prediction_review_v2.9.md")
+DAILY_MODEL_REPORT_FILE = Path("output/daily_model_report.md")
 FINAL_DECISION_FILE = Path("output/final_decision_v3.0.csv")
 FINAL_DECISION_MD_FILE = Path("output/final_decision_v3.0.md")
 SINGLE_STOCK_DECISION_FILE = Path("output/single_stock_decision.csv")
@@ -272,7 +274,7 @@ def build_stock_name_code_map(*frames: pd.DataFrame) -> dict[str, str]:
 
         for _, row in frame.iterrows():
             name = str(row.get(name_col, "")).strip()
-            code = normalize_code(row.get(code_col, ""))
+            code = normalize_optional_code(row.get(code_col, ""))
             if name and code:
                 mapping.setdefault(name, code)
 
@@ -282,7 +284,7 @@ def build_stock_name_code_map(*frames: pd.DataFrame) -> dict[str, str]:
 def resolve_trade_stock_code(stock_name: str, stock_code: str, name_code_map: dict[str, str]) -> str:
     raw_code = str(stock_code).strip()
     if raw_code:
-        return normalize_code(raw_code)
+        return normalize_optional_code(raw_code)
 
     return name_code_map.get(str(stock_name).strip(), "")
 
@@ -844,6 +846,7 @@ model_evaluation_md = load_markdown(MODEL_EVALUATION_MD_FILE)
 profit_probability_evaluation_md = load_markdown(PROFIT_PROBABILITY_EVALUATION_MD_FILE)
 calibration_report_md = load_markdown(CALIBRATION_REPORT_FILE)
 prediction_review_report_md = load_markdown(PREDICTION_REVIEW_REPORT_FILE)
+daily_model_report_md = load_markdown(DAILY_MODEL_REPORT_FILE)
 final_decision_md = load_markdown(FINAL_DECISION_MD_FILE)
 single_stock_decision_md = load_markdown(SINGLE_STOCK_DECISION_MD_FILE)
 
@@ -1056,23 +1059,57 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
         return
 
     editable_df = editable_df.sort_values("记录时间", ascending=False).reset_index(drop=True)
-    record_options = editable_df["记录ID"].tolist()
-    label_map = {
-        row["记录ID"]: (
-            f"{row.get('交易日期', '')} | {row.get('股票名称', '')} | "
-            f"{row.get('买入价格', '')}->{row.get('卖出价格', '')} | "
-            f"{row.get('数量', '')}股 | {row.get('闭环状态', '')}"
-        )
-        for _, row in editable_df.iterrows()
-    }
 
     with st.expander("修改已保存记录", expanded=False):
+        filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 1])
+
+        date_options = ["全部"] + sorted(
+            [str(value) for value in editable_df["交易日期"].dropna().unique() if str(value).strip()],
+            reverse=True,
+        )
+        type_options = ["全部", "日内T", "隔日T"]
+
+        with filter_col1:
+            selected_date_filter = st.selectbox("按日期筛选", date_options, key="edit_filter_date")
+
+        with filter_col2:
+            stock_name_filter = st.text_input("按股票名称筛选", placeholder="例如 华友", key="edit_filter_stock_name")
+
+        with filter_col3:
+            selected_type_filter = st.selectbox("按交易类型筛选", type_options, key="edit_filter_trade_type")
+
+        filtered_df = editable_df.copy()
+        if selected_date_filter != "全部":
+            filtered_df = filtered_df[filtered_df["交易日期"].astype(str).eq(selected_date_filter)]
+
+        if stock_name_filter.strip():
+            filtered_df = filtered_df[
+                filtered_df["股票名称"].astype(str).str.contains(stock_name_filter.strip(), case=False, na=False)
+            ]
+
+        if selected_type_filter != "全部":
+            filtered_df = filtered_df[filtered_df["交易类型"].astype(str).eq(selected_type_filter)]
+
+        if filtered_df.empty:
+            st.info("没有匹配的交易记录，放宽筛选条件再试。")
+            return
+
+        record_options = filtered_df["记录ID"].tolist()
+        label_map = {
+            row["记录ID"]: (
+                f"{row.get('交易日期', '')} | {row.get('股票名称', '')} | "
+                f"{row.get('买入价格', '')}->{row.get('卖出价格', '')} | "
+                f"{row.get('数量', '')}股 | {row.get('闭环状态', '')}"
+            )
+            for _, row in filtered_df.iterrows()
+        }
+
         selected_id = st.selectbox(
             "选择要修改的记录",
             record_options,
             format_func=lambda record_id: label_map.get(record_id, record_id),
         )
-        selected_row = editable_df[editable_df["记录ID"].eq(selected_id)].iloc[0]
+        selected_row = filtered_df[filtered_df["记录ID"].eq(selected_id)].iloc[0]
 
         trade_date_value = pd.to_datetime(selected_row.get("交易日期", ""), errors="coerce")
         if pd.isna(trade_date_value):
@@ -1109,9 +1146,7 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
                 )
 
             with row1_col4:
-                stored_code = str(selected_row.get("股票代码", "")).strip()
-                if stored_code == "000000":
-                    stored_code = ""
+                stored_code = normalize_optional_code(selected_row.get("股票代码", ""))
                 edit_stock_code = st.text_input(
                     "股票代码（可选）",
                     value=stored_code,
@@ -1570,7 +1605,7 @@ def render_model_training_panel() -> None:
         "操作顺序：保存训练数据 → 训练方向模型 → 训练收益目标概率 → 生成校准与解释 → 生成预测回顾。"
     )
 
-    train_col1, train_col2, train_col3, train_col4 = st.columns(4)
+    train_col1, train_col2, train_col3, train_col4, train_col5 = st.columns(5)
 
     with train_col1:
         if st.button("训练方向模型", width="stretch"):
@@ -1587,6 +1622,10 @@ def render_model_training_panel() -> None:
     with train_col4:
         if st.button("生成预测回顾", width="stretch"):
             run_main_command_and_refresh("prediction-review")
+
+    with train_col5:
+        if st.button("生成今日报告", width="stretch"):
+            run_main_command_and_refresh("daily-report")
 
     (
         dataset_samples_df,
@@ -1633,6 +1672,12 @@ def render_model_training_panel() -> None:
             st.markdown(prediction_review_report_md)
     else:
         st.info("暂无预测回顾报告，请先点击【生成预测回顾】。")
+
+    if daily_model_report_md:
+        with st.expander("展开今日模型与预测复盘报告", expanded=True):
+            st.markdown(daily_model_report_md)
+    else:
+        st.info("暂无今日模型报告，请先点击【生成今日报告】。")
 
     show_table("样本主表预览", dataset_samples_df.head(20))
 

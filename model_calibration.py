@@ -358,6 +358,21 @@ def write_calibration_report(calibration_df: pd.DataFrame, summary: dict[str, An
     CALIBRATION_REPORT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_calibration_tables(conn: sqlite3.Connection, calibration_df: pd.DataFrame, explanation_df: pd.DataFrame) -> None:
+    ensure_calibration_tables(conn)
+    if calibration_df.empty:
+        conn.execute("DELETE FROM probability_calibration_curves")
+    else:
+        calibration_df.to_sql("probability_calibration_curves", conn, if_exists="replace", index=False)
+
+    if explanation_df.empty:
+        conn.execute("DELETE FROM model_explanations")
+    else:
+        explanation_df.to_sql("model_explanations", conn, if_exists="replace", index=False)
+
+    conn.commit()
+
+
 def run_calibration_and_explain() -> dict[str, Any]:
     prediction_df = read_probability_predictions()
     label_df = read_probability_labels()
@@ -377,9 +392,7 @@ def run_calibration_and_explain() -> dict[str, Any]:
     write_calibration_report(calibration_df, summary, explanation_df)
 
     with sqlite3.connect(DATABASE_FILE) as conn:
-        ensure_calibration_tables(conn)
-        calibration_df.to_sql("probability_calibration_curves", conn, if_exists="replace", index=False)
-        explanation_df.to_sql("model_explanations", conn, if_exists="replace", index=False)
+        write_calibration_tables(conn, calibration_df, explanation_df)
 
     print("v2.8 概率校准与模型解释已生成。")
     print(f"校准报告：{CALIBRATION_REPORT_FILE}")

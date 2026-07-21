@@ -70,6 +70,15 @@ DB_TO_CN_COLUMNS = {
 CN_TO_DB_COLUMNS = {value: key for key, value in DB_TO_CN_COLUMNS.items()}
 
 
+def normalize_optional_code(code: Any) -> str:
+    text = str(code).strip()
+    if not text or text.lower() in ["nan", "none", "null"]:
+        return ""
+
+    normalized = normalize_code(text)
+    return "" if normalized == "000000" else normalized
+
+
 def calculate_commission(amount: float) -> float:
     if amount <= 0:
         return 0.0
@@ -142,7 +151,7 @@ def load_trade_records_from_sqlite() -> pd.DataFrame:
         if col not in df.columns:
             df[col] = ""
 
-    df["股票代码"] = df["股票代码"].apply(normalize_code)
+    df["股票代码"] = df["股票代码"].apply(normalize_optional_code)
 
     return df[TRADE_RECORD_COLUMNS].copy()
 
@@ -205,8 +214,7 @@ def build_trade_record(
     recorded_at: datetime | None = None,
     record_id: str | None = None,
 ) -> dict:
-    raw_code = str(stock_code).strip()
-    code = normalize_code(raw_code) if raw_code else ""
+    code = normalize_optional_code(stock_code)
     name = str(stock_name).strip()
     buy = safe_float(buy_price)
     sell = safe_float(sell_price)
@@ -214,9 +222,6 @@ def build_trade_record(
     trade_type_text = str(trade_type).strip()
     direction_text = str(direction).strip()
     now = recorded_at or datetime.now()
-
-    if not code:
-        raise ValueError("股票代码不能为空")
 
     if not name:
         raise ValueError("股票名称不能为空")
@@ -261,7 +266,8 @@ def build_trade_record(
     else:
         trade_date_text = str(trade_date).strip()
 
-    next_record_id = str(record_id).strip() if record_id else f"{now.strftime('%Y%m%d%H%M%S')}_{code}_{trade_type_text}_{direction_text}"
+    record_code_part = code or "NO_CODE"
+    next_record_id = str(record_id).strip() if record_id else f"{now.strftime('%Y%m%d%H%M%S')}_{record_code_part}_{trade_type_text}_{direction_text}"
 
     return {
         "记录ID": next_record_id,
@@ -303,7 +309,7 @@ def load_trade_records(path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = ""
 
-    df["股票代码"] = df["股票代码"].apply(normalize_code)
+    df["股票代码"] = df["股票代码"].apply(normalize_optional_code)
 
     return df[TRADE_RECORD_COLUMNS].copy()
 

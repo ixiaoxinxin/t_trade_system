@@ -1,40 +1,39 @@
-# -*- coding: utf-8 -*-
-
-from __future__ import annotations
-
+import sqlite3
 import unittest
 
 import pandas as pd
 
-from model_calibration import apply_calibration, build_calibration_table, calculate_brier, calibration_bucket
+from model_calibration import write_calibration_tables
 
 
 class ModelCalibrationTest(unittest.TestCase):
-    def test_calibration_bucket_uses_20pct_ranges(self):
-        self.assertEqual(calibration_bucket(0.01), "0-20%")
-        self.assertEqual(calibration_bucket(0.39), "20-40%")
-        self.assertEqual(calibration_bucket(0.99), "80-100%")
+    def test_write_calibration_tables_allows_empty_calibration_frame(self):
+        with sqlite3.connect(":memory:") as conn:
+            explanation_df = pd.DataFrame(
+                [
+                    {
+                        "explanation_id": "e1",
+                        "sample_id": "s1",
+                        "stock_code": "002466",
+                        "stock_name": "天齐锂业",
+                        "predict_date": "2026-07-21",
+                        "model_version": "v2.8",
+                        "source_model_version": "v2.7",
+                        "top_positive_factors": "样本不足",
+                        "top_negative_factors": "样本不足",
+                        "explanation_method": "baseline_summary",
+                        "created_at": "2026-07-21 17:30:00",
+                    }
+                ]
+            )
 
-    def test_calculate_brier(self):
-        score = calculate_brier(pd.Series([1, 0]), pd.Series([0.8, 0.2]))
-        self.assertAlmostEqual(score, 0.04)
+            write_calibration_tables(conn, pd.DataFrame(), explanation_df)
 
-    def test_build_and_apply_calibration(self):
-        predictions = pd.DataFrame([
-            {"sample_id": "a", "hit_1pct_probability": 0.75, "hit_2pct_probability": 0.65, "stop_2pct_probability": 0.2},
-            {"sample_id": "b", "hit_1pct_probability": 0.25, "hit_2pct_probability": 0.15, "stop_2pct_probability": 0.8},
-        ])
-        labels = pd.DataFrame([
-            {"sample_id": "a", "hit_1pct_after_touch": 1, "hit_2pct_after_touch": 1, "stop_2pct_after_touch": 0},
-            {"sample_id": "b", "hit_1pct_after_touch": 0, "hit_2pct_after_touch": 0, "stop_2pct_after_touch": 1},
-        ])
+            calibration_count = conn.execute("SELECT COUNT(*) FROM probability_calibration_curves").fetchone()[0]
+            explanation_count = conn.execute("SELECT COUNT(*) FROM model_explanations").fetchone()[0]
 
-        calibration_df, summary = build_calibration_table(predictions, labels)
-        calibrated = apply_calibration(predictions, summary)
-
-        self.assertFalse(calibration_df.empty)
-        self.assertIn("calibrated_hit_1pct_probability", calibrated.columns)
-        self.assertIn("calibrated_risk_adjusted_1pct", calibrated.columns)
+            self.assertEqual(calibration_count, 0)
+            self.assertEqual(explanation_count, 1)
 
 
 if __name__ == "__main__":

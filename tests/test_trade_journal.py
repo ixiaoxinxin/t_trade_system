@@ -121,18 +121,27 @@ class TradeJournalTest(unittest.TestCase):
                 quantity=100,
             )
 
-    def test_rejects_empty_stock_code_without_saving_as_zero_code(self):
-        with self.assertRaises(ValueError):
-            build_trade_record(
+    def test_allows_empty_stock_code_without_saving_as_zero_code(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "trade_records.csv"
+            record = build_trade_record(
                 stock_code="",
-                stock_name="融捷股份",
+                stock_name="华友钴业",
                 trade_date="2026-07-21",
                 trade_type="日内T",
                 direction="买入并卖出",
-                buy_price=56,
-                sell_price=57,
+                buy_price=39,
+                sell_price=47.5,
                 quantity=100,
+                recorded_at=datetime(2026, 7, 21, 13, 30, 0),
             )
+
+            append_trade_record(record, path)
+            df = load_trade_records(path)
+
+            self.assertEqual(record["股票代码"], "")
+            self.assertIn("NO_CODE", record["记录ID"])
+            self.assertEqual(df.iloc[0]["股票代码"], "")
 
 
 if __name__ == "__main__":
