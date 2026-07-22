@@ -370,6 +370,8 @@ def add_verification_summary(df: pd.DataFrame) -> pd.DataFrame:
             return "数据不足"
         if touched == "否":
             return "未给买点"
+        if stop == "是" and hit_1 == "是":
+            return "需分时确认"
         if success == "是" or hit_1 == "是":
             return "计划有效"
         if stop == "是" or touched == "是":
@@ -379,11 +381,34 @@ def add_verification_summary(df: pd.DataFrame) -> pd.DataFrame:
     text_map = {
         "计划有效": "计划有效：给了买点，达到目标。",
         "计划待优化": "待优化：给了买点，但收益不足或风险先到。",
+        "需分时确认": "需确认：日线无法判断先涨还是先跌。",
         "未给买点": "未给买点：计划没有成交机会。",
         "数据不足": "数据不足：今天不参与判断。",
     }
+
+    def row_optimization(row: pd.Series) -> str:
+        status = str(row.get("系统验证结果", "")).strip()
+        touched = str(row.get("是否触达低吸区间", "")).strip()
+        hit_1 = str(row.get("是否达到1%", "")).strip()
+        stop = str(row.get("是否触发-2%止损", "")).strip()
+
+        if status == "计划有效":
+            return "保留：规则有效"
+        if status == "需分时确认":
+            return "补分时：确认先止盈还是先止损"
+        if status == "未给买点" or touched == "否":
+            return "观察：未成交，不评价胜负"
+        if status == "数据不足":
+            return "补数据：先刷新行情"
+        if stop == "是":
+            return "降风险：买点下移，弱市少做"
+        if hit_1 != "是":
+            return "提质量：过滤弱结构和弱板块"
+        return "复核：检查规则和数据"
+
     result["系统验证结果"] = result.apply(row_status, axis=1)
     result["复盘结论"] = result["系统验证结果"].map(text_map).fillna(result["系统验证结果"])
+    result["优化方向"] = result.apply(row_optimization, axis=1)
     return result
 
 
@@ -1494,15 +1519,26 @@ def render_next_day_panel() -> None:
         st.info("暂无系统次日验证结果。")
         return
 
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
     with metric_col1:
         st.metric("计划有效", int(next_core_df["系统验证结果"].eq("计划有效").sum()))
     with metric_col2:
         st.metric("待优化", int(next_core_df["系统验证结果"].eq("计划待优化").sum()))
     with metric_col3:
-        st.metric("未给买点", int(next_core_df["系统验证结果"].eq("未给买点").sum()))
+        st.metric("需分时确认", int(next_core_df["系统验证结果"].eq("需分时确认").sum()))
     with metric_col4:
+        st.metric("未给买点", int(next_core_df["系统验证结果"].eq("未给买点").sum()))
+    with metric_col5:
         st.metric("固定持仓", int(next_core_df["固定持仓"].astype(str).isin(["是", "True", "true", "1"]).sum()))
+
+    optimization_df = (
+        next_core_df[next_core_df["系统验证结果"].isin(["计划待优化", "需分时确认"])]["优化方向"]
+        .value_counts()
+        .rename_axis("待优化原因")
+        .reset_index(name="数量")
+    )
+    if not optimization_df.empty:
+        show_table("待优化原因", optimization_df)
 
     fixed_review_df, candidate_review_df = split_fixed_candidate(next_core_df)
     core_columns = [
@@ -1510,6 +1546,7 @@ def render_next_day_panel() -> None:
         "股票名称",
         "股票代码",
         "复盘结论",
+        "优化方向",
         "是否触达低吸区间",
         "是否达到1%",
         "是否触发-2%止损",
