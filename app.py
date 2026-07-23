@@ -836,6 +836,83 @@ def show_top_metrics(
     st.caption(f"资金流入方向：{market['资金流入方向']}")
 
 
+def build_personal_trade_feedback(trade_record_df: pd.DataFrame) -> pd.DataFrame:
+    if trade_record_df.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "反馈项": "真实交易样本",
+                    "当前数据": "0 笔",
+                    "结论": "样本不足",
+                    "系统用途": "先记录日内T/隔日T闭环交易，暂不参与个性化校准。",
+                }
+            ]
+        )
+
+    df = trade_record_df.copy()
+    status_series = df.get("闭环状态", pd.Series(index=df.index, dtype=str)).astype(str)
+    closed_df = df[status_series.eq("已闭环")].copy()
+    closed_count = len(closed_df)
+    total_count = len(df)
+    open_count = total_count - closed_count
+
+    profit_series = pd.to_numeric(closed_df.get("到手利润", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    return_series = pd.to_numeric(closed_df.get("收益率", pd.Series(dtype=float)), errors="coerce").dropna()
+    total_profit = float(profit_series.sum()) if not profit_series.empty else 0.0
+    win_rate = float((profit_series > 0).mean() * 100) if not profit_series.empty else 0.0
+    avg_return = float(return_series.mean()) if not return_series.empty else 0.0
+
+    followed_series = df.get("是否按计划执行", pd.Series(index=df.index, dtype=str)).astype(str)
+    planned_count = int(followed_series.eq("是").sum())
+    planned_rate = planned_count / total_count * 100 if total_count else 0.0
+
+    trade_type_series = df.get("交易类型", pd.Series(index=df.index, dtype=str)).astype(str)
+    intraday_count = int(trade_type_series.eq("日内T").sum())
+    overnight_count = int(trade_type_series.eq("隔日T").sum())
+
+    if closed_count < 10:
+        sample_status = "只做记录"
+        sample_usage = "闭环样本少，先用于复盘，不参与模型校准。"
+    elif closed_count < 30:
+        sample_status = "可做轻量校准"
+        sample_usage = "可观察哪些系统候选在你的实盘里更容易赚钱。"
+    elif win_rate >= 55 and total_profit > 0:
+        sample_status = "可做正向校准"
+        sample_usage = "优先提炼盈利交易特征，给同类候选加参考权重。"
+    else:
+        sample_status = "优先做风险校准"
+        sample_usage = "优先提炼亏损交易共性，降低同类候选追买强度。"
+
+    return pd.DataFrame(
+        [
+            {
+                "反馈项": "闭环交易",
+                "当前数据": f"{closed_count}/{total_count} 笔，未闭环 {open_count} 笔",
+                "结论": sample_status,
+                "系统用途": sample_usage,
+            },
+            {
+                "反馈项": "实盘结果",
+                "当前数据": f"胜率 {win_rate:.1f}%，已实现 {total_profit:.2f} 元，均值 {avg_return:.2f}%",
+                "结论": "赚钱样本" if total_profit > 0 else "风险样本",
+                "系统用途": "后续用于校准系统候选的真实可执行收益，而不是只看理论命中。",
+            },
+            {
+                "反馈项": "执行纪律",
+                "当前数据": f"按计划 {planned_count}/{total_count} 笔，比例 {planned_rate:.1f}%",
+                "结论": "纪律可评估" if planned_count else "缺少计划标记",
+                "系统用途": "区分系统问题和执行偏差，避免把人为追高误算成策略失败。",
+            },
+            {
+                "反馈项": "交易类型",
+                "当前数据": f"日内T {intraday_count} 笔，隔日T {overnight_count} 笔",
+                "结论": "样本分层",
+                "系统用途": "后续分别校准日内T和隔日T，不混用两种交易节奏。",
+            },
+        ]
+    )
+
+
 def render_fixed_holding_snapshot(
     final_df: pd.DataFrame,
     sell_df: pd.DataFrame,
@@ -1187,6 +1264,8 @@ def render_trade_record_summary() -> None:
 
     with metric_col4:
         st.metric("平均收益率", f"{avg_return.mean():.2f}%" if not avg_return.empty else "-")
+
+    show_table("真实交易个性化反馈", build_personal_trade_feedback(current_trade_df))
 
     render_trade_record_editor(current_trade_df)
 
