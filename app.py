@@ -412,6 +412,93 @@ def add_verification_summary(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def pct_text(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    return f"{value * 100:.1f}%"
+
+
+def scorecard_metric(metric_name: str) -> float | None:
+    if model_scorecard_df.empty or "metric_name" not in model_scorecard_df.columns:
+        return None
+
+    metric_df = model_scorecard_df[
+        model_scorecard_df["metric_name"].astype(str).eq(metric_name)
+        & model_scorecard_df.get("segment_type", pd.Series(index=model_scorecard_df.index, dtype=str)).astype(str).eq("all")
+        & model_scorecard_df.get("segment_value", pd.Series(index=model_scorecard_df.index, dtype=str)).astype(str).eq("all")
+    ]
+    if metric_df.empty or "score" not in metric_df.columns:
+        return None
+
+    value = pd.to_numeric(metric_df["score"], errors="coerce").dropna()
+    return float(value.iloc[0]) if not value.empty else None
+
+
+def build_next_day_review_summary(next_core_df: pd.DataFrame) -> pd.DataFrame:
+    if next_core_df.empty:
+        return pd.DataFrame()
+
+    total_count = len(next_core_df)
+    touch_rate = next_core_df["是否触达低吸区间"].astype(str).eq("是").mean()
+    hit_1_rate = next_core_df["是否达到1%"].astype(str).eq("是").mean()
+    stop_rate = next_core_df["是否触发-2%止损"].astype(str).eq("是").mean()
+    needs_intraday_count = int(next_core_df["系统验证结果"].astype(str).eq("需分时确认").sum())
+    scorecard_touch_rate = scorecard_metric("buy_range_executable_rate")
+
+    model_metric_names = {"direction_hit_rate", "hit_1pct_brier", "hit_2pct_brier", "stop_2pct_brier"}
+    model_scores = []
+    if not model_scorecard_df.empty and {"metric_name", "score"}.issubset(model_scorecard_df.columns):
+        model_scores = pd.to_numeric(
+            model_scorecard_df[model_scorecard_df["metric_name"].isin(model_metric_names)]["score"],
+            errors="coerce",
+        ).dropna().tolist()
+
+    rows = [
+        {
+            "复盘项": "低吸可成交",
+            "今日数据": f"{pct_text(touch_rate)}（{int(round(touch_rate * total_count))}/{total_count}）",
+            "结论": "买点给得到" if touch_rate >= 0.6 else "买点偏低或机会不足",
+            "系统优化方向": "成交率不低时优先看风险；成交率低时复核买点区间。",
+        },
+        {
+            "复盘项": "止损风险",
+            "今日数据": pct_text(stop_rate),
+            "结论": "风险偏高" if stop_rate >= 0.4 else "风险可控",
+            "系统优化方向": "止损率高时下调买点上沿，弱结构候选降权。",
+        },
+        {
+            "复盘项": "+1%机会",
+            "今日数据": pct_text(hit_1_rate),
+            "结论": "有波动空间" if hit_1_rate >= 0.4 else "收益空间不足",
+            "系统优化方向": "保留能到 +1% 的形态，过滤冲高后易回撤样本。",
+        },
+        {
+            "复盘项": "分时确认",
+            "今日数据": f"{needs_intraday_count} 只",
+            "结论": "需要补分时" if needs_intraday_count > 0 else "日线可判断",
+            "系统优化方向": "同时出现止盈和止损时，不进入干净标签，先补分时先后顺序。",
+        },
+        {
+            "复盘项": "模型可用性",
+            "今日数据": "已有有效评分" if model_scores else "评分为空",
+            "结论": "可辅助观察" if model_scores else "暂不强排序",
+            "系统优化方向": "继续沉淀真实交易和有效标签，模型概率不替代最终操作。",
+        },
+    ]
+
+    if scorecard_touch_rate is not None and abs(scorecard_touch_rate - touch_rate) >= 0.1:
+        rows.append(
+            {
+                "复盘项": "报告口径",
+                "今日数据": f"验证表 {pct_text(touch_rate)} / 评分卡 {pct_text(scorecard_touch_rate)}",
+                "结论": "口径不一致",
+                "系统优化方向": "报告需标记数据来源和生成批次，避免混用不同运行结果。",
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def split_fixed_candidate(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if df.empty or "固定持仓" not in df.columns:
         return pd.DataFrame(), df.copy()
@@ -1134,6 +1221,7 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
             record_options,
             format_func=lambda record_id: label_map.get(record_id, record_id),
         )
+        edit_key_prefix = f"trade_record_edit_{selected_id}"
         selected_row = filtered_df[filtered_df["记录ID"].eq(selected_id)].iloc[0]
 
         trade_date_value = pd.to_datetime(selected_row.get("交易日期", ""), errors="coerce")
@@ -1152,7 +1240,11 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
             row1_col1, row1_col2, row1_col3, row1_col4 = st.columns([1, 1, 1, 1])
 
             with row1_col1:
-                edit_trade_date = st.date_input("交易日期", value=trade_date_value.date(), key="edit_trade_date")
+                edit_trade_date = st.date_input(
+                    "交易日期",
+                    value=trade_date_value.date(),
+                    key=f"{edit_key_prefix}_trade_date",
+                )
 
             with row1_col2:
                 current_trade_type = str(selected_row.get("交易类型", "隔日T"))
@@ -1160,14 +1252,14 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
                     "交易类型",
                     trade_type_options,
                     index=trade_type_options.index(current_trade_type) if current_trade_type in trade_type_options else 0,
-                    key="edit_trade_type",
+                    key=f"{edit_key_prefix}_trade_type",
                 )
 
             with row1_col3:
                 edit_stock_name = st.text_input(
                     "股票名称",
                     value=str(selected_row.get("股票名称", "")),
-                    key="edit_stock_name",
+                    key=f"{edit_key_prefix}_stock_name",
                 )
 
             with row1_col4:
@@ -1175,7 +1267,7 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
                 edit_stock_code = st.text_input(
                     "股票代码（可选）",
                     value=stored_code,
-                    key="edit_stock_code",
+                    key=f"{edit_key_prefix}_stock_code",
                 )
 
             row2_col1, row2_col2, row2_col3, row2_col4 = st.columns([1, 1, 1, 1])
@@ -1186,21 +1278,21 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
                     "方向",
                     direction_options,
                     index=direction_options.index(current_direction) if current_direction in direction_options else 0,
-                    key="edit_direction",
+                    key=f"{edit_key_prefix}_direction",
                 )
 
             with row2_col2:
                 edit_buy_price_text = st.text_input(
                     "买入价格/成本价",
                     value=str(selected_row.get("买入价格", "")).strip(),
-                    key="edit_buy_price",
+                    key=f"{edit_key_prefix}_buy_price",
                 )
 
             with row2_col3:
                 edit_sell_price_text = st.text_input(
                     "卖出价格",
                     value=str(selected_row.get("卖出价格", "")).strip(),
-                    key="edit_sell_price",
+                    key=f"{edit_key_prefix}_sell_price",
                 )
 
             with row2_col4:
@@ -1209,7 +1301,7 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
                     min_value=0,
                     value=int(safe_float(selected_row.get("数量", 0))),
                     step=100,
-                    key="edit_quantity",
+                    key=f"{edit_key_prefix}_quantity",
                 )
 
             row3_col1, row3_col2 = st.columns([1, 1])
@@ -1220,7 +1312,7 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
                     "策略来源",
                     strategy_options,
                     index=strategy_options.index(current_strategy) if current_strategy in strategy_options else 1,
-                    key="edit_strategy_source",
+                    key=f"{edit_key_prefix}_strategy_source",
                 )
 
             with row3_col2:
@@ -1229,14 +1321,14 @@ def render_trade_record_editor(current_trade_df: pd.DataFrame) -> None:
                     "是否按计划执行",
                     followed_options,
                     index=followed_options.index(current_followed) if current_followed in followed_options else 3,
-                    key="edit_followed_plan",
+                    key=f"{edit_key_prefix}_followed_plan",
                 )
 
             edit_note = st.text_area(
                 "备注",
                 value=str(selected_row.get("备注", "")),
                 height=90,
-                key="edit_note",
+                key=f"{edit_key_prefix}_note",
             )
             update_submitted = st.form_submit_button("保存修改", width="stretch")
 
@@ -1530,6 +1622,9 @@ def render_next_day_panel() -> None:
         st.metric("未给买点", int(next_core_df["系统验证结果"].eq("未给买点").sum()))
     with metric_col5:
         st.metric("固定持仓", int(next_core_df["固定持仓"].astype(str).isin(["是", "True", "true", "1"]).sum()))
+
+    review_summary_df = build_next_day_review_summary(next_core_df)
+    show_table("今日复盘摘要", review_summary_df)
 
     optimization_df = (
         next_core_df[next_core_df["系统验证结果"].isin(["计划待优化", "需分时确认"])]["优化方向"]
