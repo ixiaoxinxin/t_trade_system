@@ -434,6 +434,79 @@ def scorecard_metric(metric_name: str) -> float | None:
     return float(value.iloc[0]) if not value.empty else None
 
 
+MODEL_DECISION_METRICS = {"direction_hit_rate", "hit_1pct_brier", "hit_2pct_brier", "stop_2pct_brier"}
+
+
+def model_scorecard_has_valid_scores() -> bool:
+    if model_scorecard_df.empty or {"metric_name", "score"}.difference(model_scorecard_df.columns):
+        return False
+
+    metric_rows = model_scorecard_df[model_scorecard_df["metric_name"].isin(MODEL_DECISION_METRICS)]
+    if metric_rows.empty:
+        return False
+
+    return not pd.to_numeric(metric_rows["score"], errors="coerce").dropna().empty
+
+
+def probability_has_variation(df: pd.DataFrame, columns: list[str]) -> bool:
+    if df.empty:
+        return False
+
+    valid_counts = []
+    for col in columns:
+        if col not in df.columns:
+            continue
+        count = pd.to_numeric(df[col], errors="coerce").dropna().round(6).nunique()
+        valid_counts.append(count)
+
+    return bool(valid_counts) and any(count > 1 for count in valid_counts)
+
+
+def build_model_sorting_guard(
+    model_predictions_df: pd.DataFrame,
+    profit_probability_df: pd.DataFrame,
+) -> pd.DataFrame:
+    score_valid = model_scorecard_has_valid_scores()
+    direction_varied = probability_has_variation(
+        model_predictions_df,
+        ["next_day_up_probability", "direction_confidence"],
+    )
+    profit_varied = probability_has_variation(
+        profit_probability_df,
+        ["hit_1pct_probability", "hit_2pct_probability", "stop_2pct_probability"],
+    )
+    allow_sorting = score_valid and (direction_varied or profit_varied)
+
+    return pd.DataFrame(
+        [
+            {
+                "检查项": "模型评分",
+                "状态": "有效" if score_valid else "为空/不可用",
+                "页面动作": "可参考评分" if score_valid else "不参与强排序",
+                "原因": "评分卡存在有效指标" if score_valid else "AUC、Brier 等关键指标为空或缺失",
+            },
+            {
+                "检查项": "方向概率",
+                "状态": "有区分" if direction_varied else "无区分",
+                "页面动作": "可辅助观察" if direction_varied else "只显示，不排序",
+                "原因": "不同股票概率存在差异" if direction_varied else "概率相同、为空或回退到基准概率",
+            },
+            {
+                "检查项": "收益概率",
+                "状态": "有区分" if profit_varied else "无区分",
+                "页面动作": "可辅助观察" if profit_varied else "只显示，不排序",
+                "原因": "收益/止损概率存在差异" if profit_varied else "收益目标概率相同或为空",
+            },
+            {
+                "检查项": "排序保护",
+                "状态": "允许辅助排序" if allow_sorting else "禁止强排序",
+                "页面动作": "可以参与候选辅助排序" if allow_sorting else "最终操作只看规则、卖点和单票决策",
+                "原因": "评分有效且概率有区分" if allow_sorting else "模型还没有证明可用于个股强弱排序",
+            },
+        ]
+    )
+
+
 def build_next_day_review_summary(next_core_df: pd.DataFrame) -> pd.DataFrame:
     if next_core_df.empty:
         return pd.DataFrame()
@@ -445,13 +518,7 @@ def build_next_day_review_summary(next_core_df: pd.DataFrame) -> pd.DataFrame:
     needs_intraday_count = int(next_core_df["系统验证结果"].astype(str).eq("需分时确认").sum())
     scorecard_touch_rate = scorecard_metric("buy_range_executable_rate")
 
-    model_metric_names = {"direction_hit_rate", "hit_1pct_brier", "hit_2pct_brier", "stop_2pct_brier"}
-    model_scores = []
-    if not model_scorecard_df.empty and {"metric_name", "score"}.issubset(model_scorecard_df.columns):
-        model_scores = pd.to_numeric(
-            model_scorecard_df[model_scorecard_df["metric_name"].isin(model_metric_names)]["score"],
-            errors="coerce",
-        ).dropna().tolist()
+    has_model_score = model_scorecard_has_valid_scores()
 
     rows = [
         {
@@ -480,8 +547,8 @@ def build_next_day_review_summary(next_core_df: pd.DataFrame) -> pd.DataFrame:
         },
         {
             "复盘项": "模型可用性",
-            "今日数据": "已有有效评分" if model_scores else "评分为空",
-            "结论": "可辅助观察" if model_scores else "暂不强排序",
+            "今日数据": "已有有效评分" if has_model_score else "评分为空",
+            "结论": "可辅助观察" if has_model_score else "暂不强排序",
             "系统优化方向": "继续沉淀真实交易和有效标签，模型概率不替代最终操作。",
         },
     ]
@@ -1774,6 +1841,10 @@ def render_model_training_panel() -> None:
         prediction_log_df,
         model_predictions_df,
     )
+    show_table(
+        "模型排序保护",
+        build_model_sorting_guard(model_predictions_df, profit_probability_df),
+    )
 
     if dataset_quality_md:
         with st.expander("展开数据集质量报告", expanded=False):
@@ -1843,6 +1914,8 @@ def render_model_prediction_panel() -> None:
         prediction_log_df,
         model_predictions_df,
     )
+    sorting_guard_df = build_model_sorting_guard(model_predictions_df, profit_probability_df)
+    show_table("模型排序保护", sorting_guard_df)
 
     model_show_df = model_predictions_df.rename(columns={
         "stock_code": "股票代码",
