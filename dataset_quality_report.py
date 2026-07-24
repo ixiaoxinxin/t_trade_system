@@ -23,6 +23,7 @@ REQUIRED_LABEL_FIELDS = [
     "stop_2pct_after_touch",
     "first_event",
     "execution_quality",
+    "label_quality",
 ]
 
 REQUIRED_FEATURE_FIELDS = [
@@ -113,6 +114,12 @@ def build_label_review_queue(label_df: pd.DataFrame, llm_df: pd.DataFrame) -> pd
 
             if stop == 1 and (hit_1 == 1 or hit_2 == 1):
                 reasons.append("needs_minute_path:hit_and_stop_in_same_ohlc")
+
+            label_quality = str(row.get("label_quality", "")).strip()
+            if label_quality == "ambiguous_intraday":
+                reasons.append("needs_minute_path:label_quality_ambiguous")
+            elif label_quality == "missing_data":
+                reasons.append("missing_data:label_quality")
 
             if reasons:
                 rows.append({

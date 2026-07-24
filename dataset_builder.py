@@ -131,6 +131,7 @@ TABLE_SCHEMAS = {
         next_day_low_pct REAL,
         realized_path_type TEXT,
         execution_quality TEXT,
+        label_quality TEXT,
         label_source TEXT
     """,
     "prediction_log": """
@@ -501,6 +502,13 @@ def build_minute_cache_features(stock_code: str, feature_date: str, prev_close: 
 def ensure_database(conn: sqlite3.Connection) -> None:
     for table_name, schema in TABLE_SCHEMAS.items():
         conn.execute(f"CREATE TABLE IF NOT EXISTS {table_name} ({schema})")
+        if table_name == "label_snapshot":
+            existing_columns = {
+                row[1]
+                for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            if "label_quality" not in existing_columns:
+                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN label_quality TEXT")
         conn.execute(f"DELETE FROM {table_name}")
 
     conn.commit()

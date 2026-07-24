@@ -21,7 +21,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from data_provider import get_stock_minute
+from data_provider import get_stock_minute, get_stock_realtime_quote
 from common import normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
 from fixed_holdings import enrich_watchlist_with_fixed_holdings
@@ -103,8 +103,11 @@ def get_today_morning_data(symbol: str) -> pd.DataFrame:
     if minute_df.empty:
         return pd.DataFrame()
 
-    latest_date = minute_df["datetime"].dt.date.max()
-    today_df = minute_df[minute_df["datetime"].dt.date == latest_date].copy()
+    today_date = datetime.now().date()
+    today_df = minute_df[minute_df["datetime"].dt.date == today_date].copy()
+
+    if today_df.empty:
+        return pd.DataFrame()
 
     morning_df = today_df[
         (today_df["datetime"].dt.time >= pd.to_datetime("09:30").time())
@@ -112,6 +115,102 @@ def get_today_morning_data(symbol: str) -> pd.DataFrame:
     ].copy()
 
     return morning_df.sort_values("datetime").reset_index(drop=True)
+
+
+def quote_snapshot(symbol: str) -> dict:
+    quote = get_stock_realtime_quote(symbol)
+    quote_date = str(quote.get("行情日期", "")).strip()
+    quote_time = str(quote.get("行情时间", "")).strip()
+    quote_datetime = " ".join(part for part in [quote_date, quote_time] if part)
+
+    return {
+        "当前价": safe_float(quote.get("最新价", 0)),
+        "实时行情时间": quote_datetime,
+        "实时行情来源": str(quote.get("数据源", "")).strip(),
+        "实时行情日期": quote_date,
+    }
+
+
+def minute_latest_time(minute_df: pd.DataFrame) -> str:
+    if minute_df.empty or "datetime" not in minute_df.columns:
+        return ""
+
+    latest = minute_df["datetime"].max()
+    if pd.isna(latest):
+        return ""
+
+    return pd.to_datetime(latest).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def data_freshness(quote_info: dict, minute_df: pd.DataFrame) -> str:
+    today_text = datetime.now().strftime("%Y-%m-%d")
+    quote_date = str(quote_info.get("实时行情日期", "")).strip()
+    minute_time = minute_latest_time(minute_df)
+    minute_date = minute_time[:10] if minute_time else ""
+    quote_price = safe_float(quote_info.get("当前价", 0))
+
+    if quote_date == today_text and quote_price > 0:
+        return "实时已刷新"
+
+    if minute_date == today_text:
+        return "实时缺失，使用今日分钟线"
+
+    if quote_date or minute_date:
+        return f"行情非今日：实时{quote_date or '-'}，分钟{minute_date or '-'}"
+
+    return "行情缺失"
+
+
+def base_empty_result(
+    row: pd.Series,
+    *,
+    symbol: str,
+    name: str,
+    fixed_flag: str,
+    fixed_reason: str,
+    refresh_status: str,
+    reference_price: float,
+    reason: str,
+    advice: str,
+) -> dict:
+    quote_info = quote_snapshot(symbol)
+    return {
+        "验证时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "股票代码": symbol,
+        "股票名称": name,
+        "固定持仓": fixed_flag,
+        "置顶原因": fixed_reason,
+        "行情刷新状态": refresh_status or reason,
+        "数据时效": data_freshness(quote_info, pd.DataFrame()),
+        "实时行情时间": quote_info.get("实时行情时间", ""),
+        "分钟最新时间": "",
+        "隔夜建议等级": row.get("隔夜建议等级", "持仓"),
+        "分时结构标签": row.get("分时结构标签", ""),
+        "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
+        "最终评分": safe_float(row.get("最终评分", 0)),
+        "隔夜参考价": round(reference_price, 2) if reference_price > 0 else 0,
+        "今日开盘": 0,
+        "上午最高": 0,
+        "上午最低": 0,
+        "午盘价": 0,
+        "当前价": round(safe_float(quote_info.get("当前价", 0)), 2),
+        "上午成交额": 0,
+        "开盘涨幅": 0,
+        "上午最高涨幅": 0,
+        "上午最低涨幅": 0,
+        "午盘涨幅": 0,
+        "当前涨幅": 0,
+        "午盘位置": 0,
+        "是否达到1%": "否",
+        "是否达到2%": "否",
+        "是否触发-2%止损": "否",
+        "上午结构标签": "待刷新",
+        "下午操作建议": advice,
+        "上午最大回撤": 0,
+        "冲高保持率": 0,
+        "回撤风险等级": "待刷新",
+        "冲高质量标签": "待刷新",
+    }
 
 
 def calculate_drawdown_metrics(high_pct: float, lunch_pct: float) -> dict:
@@ -221,38 +320,17 @@ def calculate_lunch_review(row: pd.Series) -> dict | None:
 
     if reference_price <= 0:
         if fixed_flag == "是":
-            return {
-                "验证时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "股票代码": symbol,
-                "股票名称": name,
-                "固定持仓": fixed_flag,
-                "置顶原因": fixed_reason,
-                "行情刷新状态": refresh_status or "参考价为空",
-                "隔夜建议等级": row.get("隔夜建议等级", "持仓"),
-                "分时结构标签": row.get("分时结构标签", ""),
-                "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
-                "最终评分": safe_float(row.get("最终评分", 0)),
-                "隔夜参考价": 0,
-                "今日开盘": 0,
-                "上午最高": 0,
-                "上午最低": 0,
-                "午盘价": 0,
-                "上午成交额": 0,
-                "开盘涨幅": 0,
-                "上午最高涨幅": 0,
-                "上午最低涨幅": 0,
-                "午盘涨幅": 0,
-                "午盘位置": 0,
-                "是否达到1%": "否",
-                "是否达到2%": "否",
-                "是否触发-2%止损": "否",
-                "上午结构标签": "待刷新",
-                "下午操作建议": "固定持仓已置顶，但参考价为空；请刷新日线/分钟行情。",
-                "上午最大回撤": 0,
-                "冲高保持率": 0,
-                "回撤风险等级": "待刷新",
-                "冲高质量标签": "待刷新",
-            }
+            return base_empty_result(
+                row,
+                symbol=symbol,
+                name=name,
+                fixed_flag=fixed_flag,
+                fixed_reason=fixed_reason,
+                refresh_status=refresh_status,
+                reference_price=0,
+                reason="参考价为空",
+                advice="固定持仓已置顶，但参考价为空；请刷新日线/分钟行情。",
+            )
         print(f"{symbol} {name} 缺少参考价，跳过")
         return None
 
@@ -260,51 +338,35 @@ def calculate_lunch_review(row: pd.Series) -> dict | None:
 
     if morning_df.empty:
         if fixed_flag == "是":
-            return {
-                "验证时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "股票代码": symbol,
-                "股票名称": name,
-                "固定持仓": fixed_flag,
-                "置顶原因": fixed_reason,
-                "行情刷新状态": refresh_status or "上午分钟数据为空",
-                "隔夜建议等级": row.get("隔夜建议等级", "持仓"),
-                "分时结构标签": row.get("分时结构标签", ""),
-                "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
-                "最终评分": safe_float(row.get("最终评分", 0)),
-                "隔夜参考价": round(reference_price, 2),
-                "今日开盘": 0,
-                "上午最高": 0,
-                "上午最低": 0,
-                "午盘价": 0,
-                "上午成交额": 0,
-                "开盘涨幅": 0,
-                "上午最高涨幅": 0,
-                "上午最低涨幅": 0,
-                "午盘涨幅": 0,
-                "午盘位置": 0,
-                "是否达到1%": "否",
-                "是否达到2%": "否",
-                "是否触发-2%止损": "否",
-                "上午结构标签": "待刷新",
-                "下午操作建议": "固定持仓已置顶，但上午分钟数据为空；请稍后刷新或检查行情源。",
-                "上午最大回撤": 0,
-                "冲高保持率": 0,
-                "回撤风险等级": "待刷新",
-                "冲高质量标签": "待刷新",
-            }
+            return base_empty_result(
+                row,
+                symbol=symbol,
+                name=name,
+                fixed_flag=fixed_flag,
+                fixed_reason=fixed_reason,
+                refresh_status=refresh_status,
+                reference_price=reference_price,
+                reason="上午分钟数据为空",
+                advice="固定持仓已置顶，但上午分钟数据为空；请稍后刷新或检查行情源。",
+            )
         print(f"{symbol} {name} 上午分钟数据为空，跳过")
         return None
+
+    quote_info = quote_snapshot(symbol)
 
     open_price = safe_float(morning_df["open"].iloc[0])
     morning_high = safe_float(morning_df["high"].max())
     morning_low = safe_float(morning_df["low"].min())
     lunch_price = safe_float(morning_df["close"].iloc[-1])
+    quote_current_price = safe_float(quote_info.get("当前价", 0))
+    current_price = quote_current_price if quote_current_price > 0 else lunch_price
     morning_amount = safe_float(morning_df["amount"].sum())
 
     open_pct = (open_price - reference_price) / reference_price * 100
     high_pct = (morning_high - reference_price) / reference_price * 100
     low_pct = (morning_low - reference_price) / reference_price * 100
     lunch_pct = (lunch_price - reference_price) / reference_price * 100
+    current_pct = (current_price - reference_price) / reference_price * 100
 
     if morning_high > morning_low:
         lunch_position = (lunch_price - morning_low) / (morning_high - morning_low)
@@ -347,6 +409,9 @@ def calculate_lunch_review(row: pd.Series) -> dict | None:
         "固定持仓": fixed_flag,
         "置顶原因": fixed_reason,
         "行情刷新状态": refresh_status or "上午分钟已刷新",
+        "数据时效": data_freshness(quote_info, morning_df),
+        "实时行情时间": quote_info.get("实时行情时间", ""),
+        "分钟最新时间": minute_latest_time(morning_df),
         "隔夜建议等级": row.get("隔夜建议等级", ""),
         "分时结构标签": row.get("分时结构标签", ""),
         "尾盘抢筹标签": row.get("尾盘抢筹标签", ""),
@@ -356,11 +421,13 @@ def calculate_lunch_review(row: pd.Series) -> dict | None:
         "上午最高": round(morning_high, 2),
         "上午最低": round(morning_low, 2),
         "午盘价": round(lunch_price, 2),
+        "当前价": round(current_price, 2),
         "上午成交额": round(morning_amount, 2),
         "开盘涨幅": round(open_pct, 2),
         "上午最高涨幅": round(high_pct, 2),
         "上午最低涨幅": round(low_pct, 2),
         "午盘涨幅": round(lunch_pct, 2),
+        "当前涨幅": round(current_pct, 2),
         "午盘位置": round(lunch_position, 4),
         "是否达到1%": "是" if hit_1 else "否",
         "是否达到2%": "是" if hit_2 else "否",

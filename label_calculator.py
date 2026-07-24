@@ -29,6 +29,7 @@ LABEL_COLUMNS = [
     "next_day_low_pct",
     "realized_path_type",
     "execution_quality",
+    "label_quality",
     "label_source",
 ]
 
@@ -50,10 +51,19 @@ def yes_no_to_int(value: Any) -> int | None:
 
 
 def first_event(row: pd.Series) -> str:
+    intraday_first = str(row.get("分时首事件", "")).strip()
+    intraday_status = str(row.get("分时确认状态", "")).strip()
+
+    if intraday_first in ["no_touch", "hit_1pct", "hit_2pct", "stop_loss", "no_event"]:
+        return intraday_first
+
+    if intraday_first in ["ambiguous_same_minute", "minute_missing"] or intraday_status == "需分时确认":
+        return "ambiguous_ohlc_path"
+
     touch = label_bool(row, "是否触达低吸区间", "touch")
-    hit_1 = label_bool(row, "是否达到1%", "hit_1pct")
-    hit_2 = label_bool(row, "是否达到2%", "hit_2pct")
-    stop = label_bool(row, "是否触发-2%止损", "stop_loss")
+    hit_1 = label_bool(row, "触达后是否达到1%", "hit_1pct")
+    hit_2 = label_bool(row, "触达后是否达到2%", "hit_2pct")
+    stop = label_bool(row, "触达后是否触发-2%止损", "stop_loss")
 
     if touch == 0:
         return "no_touch"
@@ -74,11 +84,19 @@ def first_event(row: pd.Series) -> str:
 
 
 def execution_quality(row: pd.Series) -> str:
+    execution_result = str(row.get("执行验证结果", "")).strip()
+    if execution_result == "需分时确认":
+        return "需分时确认"
+    if execution_result == "给买点且成功":
+        return "可执行盈利"
+    if execution_result == "风险触发":
+        return "可执行止损"
+
     touch = label_bool(row, "是否触达低吸区间", "touch")
     success = yes_no_to_int(row.get("是否验证成功"))
-    stop_loss = label_bool(row, "是否触发-2%止损", "stop_loss")
-    hit_1 = label_bool(row, "是否达到1%", "hit_1pct")
-    hit_2 = label_bool(row, "是否达到2%", "hit_2pct")
+    stop_loss = label_bool(row, "触达后是否触发-2%止损", "stop_loss")
+    hit_1 = label_bool(row, "触达后是否达到1%", "hit_1pct")
+    hit_2 = label_bool(row, "触达后是否达到2%", "hit_2pct")
 
     if touch == 0:
         return "未触达"
@@ -96,6 +114,30 @@ def execution_quality(row: pd.Series) -> str:
         return "可执行盈利"
 
     return "可执行失败"
+
+
+def label_quality(row: pd.Series) -> str:
+    data_status = str(row.get("数据状态", "ready") or "ready").strip()
+    if data_status not in ["", "ready"]:
+        return "missing_data"
+
+    required_values = [
+        row.get("次日最高"),
+        row.get("次日最低"),
+        row.get("次日收盘"),
+        row.get("买入参考价"),
+    ]
+    if any(safe_float(value, 0) <= 0 for value in required_values):
+        return "missing_data"
+
+    quality_event = first_event(row)
+    intraday_status = str(row.get("分时确认状态", "")).strip()
+    execution = str(row.get("执行验证结果", "")).strip()
+
+    if quality_event == "ambiguous_ohlc_path" or intraday_status == "需分时确认" or execution == "需分时确认":
+        return "ambiguous_intraday"
+
+    return "clean"
 
 
 def calc_touch_by_ohlc(row: pd.Series) -> int | None:
@@ -138,6 +180,10 @@ def calc_stop_by_ohlc(row: pd.Series) -> int | None:
 
 
 def label_bool(row: pd.Series, source_field: str, calc_type: str) -> int | None:
+    source_value = yes_no_to_int(row.get(source_field))
+    if source_value is not None:
+        return source_value
+
     if calc_type == "touch":
         calculated = calc_touch_by_ohlc(row)
     elif calc_type == "hit_1pct":
@@ -185,14 +231,15 @@ def calculate_label_snapshot(
             "target_date": str(row.get("次日日期", ""))[:10],
             "direction_up_close": int(close_pct > 0),
             "touch_buy_range": label_bool(row, "是否触达低吸区间", "touch"),
-            "hit_1pct_after_touch": label_bool(row, "是否达到1%", "hit_1pct"),
-            "hit_2pct_after_touch": label_bool(row, "是否达到2%", "hit_2pct"),
-            "stop_2pct_after_touch": label_bool(row, "是否触发-2%止损", "stop_loss"),
+            "hit_1pct_after_touch": label_bool(row, "触达后是否达到1%", "hit_1pct"),
+            "hit_2pct_after_touch": label_bool(row, "触达后是否达到2%", "hit_2pct"),
+            "stop_2pct_after_touch": label_bool(row, "触达后是否触发-2%止损", "stop_loss"),
             "first_event": first_event(row),
             "next_day_high_pct": safe_float(row.get("次日最高涨幅", 0)),
             "next_day_low_pct": safe_float(row.get("次日最低涨幅", 0)),
             "realized_path_type": str(row.get("分时结构标签", "")),
             "execution_quality": execution_quality(row),
+            "label_quality": label_quality(row),
             "label_source": "next_day_review",
         })
 

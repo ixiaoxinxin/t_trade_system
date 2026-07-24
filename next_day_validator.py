@@ -20,7 +20,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from data_provider import get_stock_daily
+from data_provider import get_stock_daily, get_stock_minute
 from common import normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
 from fixed_holdings import enrich_watchlist_with_fixed_holdings
@@ -71,6 +71,164 @@ def standardize_daily_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("date").reset_index(drop=True)
 
     return df
+
+
+def standardize_minute_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df = df.copy()
+    df = df.rename(columns={
+        "时间": "datetime",
+        "日期": "datetime",
+        "day": "datetime",
+        "date": "datetime",
+        "开盘": "open",
+        "最高": "high",
+        "最低": "low",
+        "收盘": "close",
+        "最新价": "close",
+        "成交量": "volume",
+        "成交额": "amount",
+    })
+
+    if "datetime" not in df.columns:
+        return pd.DataFrame()
+
+    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+
+    for col in ["open", "high", "low", "close", "volume", "amount"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    required = ["datetime", "open", "high", "low", "close"]
+    if any(col not in df.columns for col in required):
+        return pd.DataFrame()
+
+    return df.dropna(subset=required).sort_values("datetime").reset_index(drop=True)
+
+
+def get_target_minute_data(symbol: str, target_date: str) -> pd.DataFrame:
+    try:
+        minute_df = standardize_minute_columns(get_stock_minute(symbol))
+    except Exception as e:
+        print(f"{symbol} 获取分钟线失败：{e}")
+        return pd.DataFrame()
+
+    if minute_df.empty or not target_date:
+        return pd.DataFrame()
+
+    target_dt = pd.to_datetime(target_date, errors="coerce")
+    if pd.isna(target_dt):
+        return pd.DataFrame()
+
+    return minute_df[minute_df["datetime"].dt.date == target_dt.date()].copy().reset_index(drop=True)
+
+
+def confirm_intraday_sequence(
+    *,
+    symbol: str,
+    target_date: str,
+    plan_buy_low: float,
+    plan_buy_high: float,
+    plan_buy_price: float,
+    stop_price: float,
+    target_1_price: float,
+    target_2_price: float,
+) -> dict:
+    minute_df = get_target_minute_data(symbol, target_date)
+
+    if minute_df.empty:
+        return {
+            "touched": None,
+            "hit_1": None,
+            "hit_2": None,
+            "stop": None,
+            "first_event": "minute_missing",
+            "first_event_time": "",
+            "status": "分时缺失",
+            "message": "分钟数据缺失，日线同时触发收益和止损时需分时确认。",
+        }
+
+    touched = False
+    touch_time = ""
+    hit_1_after_touch = False
+    hit_2_after_touch = False
+    stop_after_touch = False
+    first_event = "no_event"
+    first_event_time = ""
+
+    for _, minute in minute_df.iterrows():
+        minute_time = pd.to_datetime(minute["datetime"]).strftime("%Y-%m-%d %H:%M")
+        high = safe_float(minute.get("high", 0))
+        low = safe_float(minute.get("low", 0))
+
+        if not touched and low <= plan_buy_high and high >= plan_buy_low:
+            touched = True
+            touch_time = minute_time
+
+        if not touched:
+            continue
+
+        hit_2_now = high >= target_2_price
+        hit_1_now = high >= target_1_price
+        stop_now = low <= stop_price
+
+        hit_1_after_touch = hit_1_after_touch or hit_1_now
+        hit_2_after_touch = hit_2_after_touch or hit_2_now
+        stop_after_touch = stop_after_touch or stop_now
+
+        if first_event != "no_event":
+            continue
+
+        if stop_now and (hit_1_now or hit_2_now):
+            first_event = "ambiguous_same_minute"
+            first_event_time = minute_time
+        elif hit_2_now:
+            first_event = "hit_2pct"
+            first_event_time = minute_time
+        elif hit_1_now:
+            first_event = "hit_1pct"
+            first_event_time = minute_time
+        elif stop_now:
+            first_event = "stop_loss"
+            first_event_time = minute_time
+
+    if not touched:
+        return {
+            "touched": False,
+            "hit_1": False,
+            "hit_2": False,
+            "stop": False,
+            "first_event": "no_touch",
+            "first_event_time": "",
+            "status": "分时已确认",
+            "message": "分钟线未触达计划低吸区间。",
+        }
+
+    if first_event == "ambiguous_same_minute":
+        status = "需分时确认"
+        message = f"{first_event_time} 同一分钟同时覆盖止盈/止损价格，需更细分时或成交记录确认。"
+    elif first_event in ["hit_2pct", "hit_1pct"]:
+        status = "分时已确认"
+        message = f"先触达买点 {touch_time}，首事件 {first_event_time} 为止盈。"
+    elif first_event == "stop_loss":
+        status = "分时已确认"
+        message = f"先触达买点 {touch_time}，首事件 {first_event_time} 为止损。"
+    else:
+        status = "分时已确认"
+        message = f"先触达买点 {touch_time}，之后未触发目标或止损。"
+
+    return {
+        "touched": True,
+        "hit_1": hit_1_after_touch,
+        "hit_2": hit_2_after_touch,
+        "stop": stop_after_touch,
+        "first_event": first_event,
+        "first_event_time": first_event_time,
+        "status": status,
+        "message": message,
+    }
 
 
 def get_plan_buy_range(row: pd.Series, reference_price: float) -> tuple[float, float]:
@@ -235,6 +393,9 @@ def calculate_review(row: pd.Series) -> dict | None:
                 "触达后是否达到2%": "否",
                 "触达后是否触发-2%止损": "否",
                 "执行验证结果": "行情待刷新",
+                "分时确认状态": "分时缺失",
+                "分时首事件": "minute_missing",
+                "分时首事件时间": "",
                 "时序判断": "固定持仓已置顶，但次日行情为空；不写入有效训练标签。",
                 "是否验证成功": "否",
             }
@@ -268,13 +429,46 @@ def calculate_review(row: pd.Series) -> dict | None:
     hit_1pct_after_plan_buy = touched_buy_range and next_high >= plan_target_1_price
     hit_2pct_after_plan_buy = touched_buy_range and next_high >= plan_target_2_price
     stop_loss_hit_after_plan_buy = touched_buy_range and next_low <= plan_stop_loss_price
+    ohlc_needs_sequence = hit_1pct_after_plan_buy and stop_loss_hit_after_plan_buy
+
+    intraday = confirm_intraday_sequence(
+        symbol=symbol,
+        target_date=str(pd.to_datetime(next_date).date()) if pd.notna(next_date) else "",
+        plan_buy_low=plan_buy_low,
+        plan_buy_high=plan_buy_high,
+        plan_buy_price=plan_buy_price,
+        stop_price=plan_stop_loss_price,
+        target_1_price=plan_target_1_price,
+        target_2_price=plan_target_2_price,
+    )
+
+    if intraday["touched"] is not None:
+        touched_buy_range = bool(intraday["touched"])
+        hit_1pct_after_plan_buy = bool(intraday["hit_1"])
+        hit_2pct_after_plan_buy = bool(intraday["hit_2"])
+        stop_loss_hit_after_plan_buy = bool(intraday["stop"])
 
     execution_result = classify_execution_result(
         touched_buy_range=touched_buy_range,
         hit_1pct_after_plan_buy=hit_1pct_after_plan_buy,
         stop_loss_hit_after_plan_buy=stop_loss_hit_after_plan_buy,
     )
+
+    if intraday["first_event"] == "ambiguous_same_minute":
+        execution_result = "需分时确认"
+    elif intraday["first_event"] == "stop_loss":
+        execution_result = "风险触发"
+    elif intraday["first_event"] in ["hit_1pct", "hit_2pct"]:
+        execution_result = "给买点且成功"
+    elif ohlc_needs_sequence and intraday["first_event"] == "minute_missing":
+        execution_result = "需分时确认"
+
     success = execution_result == "给买点且成功"
+
+    if intraday["first_event"] == "minute_missing" and not ohlc_needs_sequence:
+        sequence_judgement = "日线OHLC未出现收益/止损冲突，按计划买入价做保守验证。"
+    else:
+        sequence_judgement = intraday["message"]
 
     result = {
         "验证日期": datetime.now().strftime("%Y-%m-%d"),
@@ -312,7 +506,10 @@ def calculate_review(row: pd.Series) -> dict | None:
         "触达后是否达到2%": "是" if hit_2pct_after_plan_buy else "否",
         "触达后是否触发-2%止损": "是" if stop_loss_hit_after_plan_buy else "否",
         "执行验证结果": execution_result,
-        "时序判断": "日线OHLC无法确认高低点先后，按计划买入价做保守验证。",
+        "分时确认状态": intraday["status"],
+        "分时首事件": intraday["first_event"],
+        "分时首事件时间": intraday["first_event_time"],
+        "时序判断": sequence_judgement,
         "是否验证成功": "是" if success else "否",
     }
 
