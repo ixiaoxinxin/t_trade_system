@@ -509,7 +509,8 @@ def ensure_database(conn: sqlite3.Connection) -> None:
             }
             if "label_quality" not in existing_columns:
                 conn.execute(f"ALTER TABLE {table_name} ADD COLUMN label_quality TEXT")
-        conn.execute(f"DELETE FROM {table_name}")
+        if table_name != "trade_records":
+            conn.execute(f"DELETE FROM {table_name}")
 
     conn.commit()
 
@@ -519,6 +520,50 @@ def insert_dataframe(conn: sqlite3.Connection, table_name: str, df: pd.DataFrame
         return
 
     df.to_sql(table_name, conn, if_exists="append", index=False)
+
+
+def upsert_trade_records(conn: sqlite3.Connection, df: pd.DataFrame) -> None:
+    if df.empty:
+        return
+
+    columns = [
+        "record_id",
+        "recorded_at",
+        "trade_date",
+        "trade_type",
+        "stock_code",
+        "stock_name",
+        "direction",
+        "buy_price",
+        "sell_price",
+        "quantity",
+        "buy_commission",
+        "sell_commission",
+        "sell_stamp_tax",
+        "total_commission",
+        "net_profit",
+        "return_rate",
+        "closed_status",
+        "strategy_source",
+        "followed_plan",
+        "note",
+    ]
+    placeholders = ", ".join(["?"] * len(columns))
+    quoted_columns = ", ".join(columns)
+
+    cleaned = df.copy()
+    for column in columns:
+        if column not in cleaned.columns:
+            cleaned[column] = None
+    cleaned = cleaned[columns].where(pd.notna(cleaned), None)
+
+    conn.executemany(
+        f"""
+        INSERT OR REPLACE INTO trade_records ({quoted_columns})
+        VALUES ({placeholders})
+        """,
+        cleaned.itertuples(index=False, name=None),
+    )
 
 
 def combine_frames(frames: list[pd.DataFrame], dedupe_key: str) -> pd.DataFrame:
@@ -1004,7 +1049,7 @@ def build_dataset() -> dict:
         insert_dataframe(conn, "feature_snapshot", feature_df)
         insert_dataframe(conn, "label_snapshot", label_df)
         insert_dataframe(conn, "prediction_log", prediction_df)
-        insert_dataframe(conn, "trade_records", trade_df)
+        upsert_trade_records(conn, trade_df)
         insert_dataframe(conn, "llm_label_snapshot", llm_df)
         insert_dataframe(conn, "llm_provider_status", provider_status_df)
         insert_dataframe(conn, "api_usage_log", usage_df)

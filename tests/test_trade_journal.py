@@ -7,6 +7,8 @@ from datetime import date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pandas as pd
+import trade_journal
 from trade_journal import (
     append_trade_record,
     build_trade_record,
@@ -142,6 +144,73 @@ class TradeJournalTest(unittest.TestCase):
             self.assertEqual(record["股票代码"], "")
             self.assertIn("NO_CODE", record["记录ID"])
             self.assertEqual(df.iloc[0]["股票代码"], "")
+
+    def test_sqlite_append_writes_csv_backup(self):
+        with TemporaryDirectory() as temp_dir:
+            original_db = trade_journal.TRADE_DATABASE_FILE
+            original_file = trade_journal.TRADE_RECORD_FILE
+            trade_journal.TRADE_DATABASE_FILE = Path(temp_dir) / "trade_dataset.sqlite3"
+            trade_journal.TRADE_RECORD_FILE = Path(temp_dir) / "trade_records.csv"
+
+            try:
+                record = build_trade_record(
+                    record_id="record-sqlite-1",
+                    stock_code="002192",
+                    stock_name="融捷股份",
+                    trade_date="2026-07-27",
+                    trade_type="日内T",
+                    direction="买入并卖出",
+                    buy_price=63.7,
+                    sell_price=64.24,
+                    quantity=100,
+                    recorded_at=datetime(2026, 7, 27, 13, 40, 44),
+                )
+
+                df = trade_journal.append_trade_record(record, trade_journal.TRADE_RECORD_FILE)
+                backup_df = load_trade_records(trade_journal.TRADE_RECORD_FILE)
+
+                self.assertEqual(len(df), 1)
+                self.assertTrue(trade_journal.TRADE_RECORD_FILE.exists())
+                self.assertEqual(len(backup_df), 1)
+                self.assertEqual(backup_df.iloc[0]["记录ID"], "record-sqlite-1")
+            finally:
+                trade_journal.TRADE_DATABASE_FILE = original_db
+                trade_journal.TRADE_RECORD_FILE = original_file
+
+    def test_sync_backup_does_not_overwrite_non_empty_csv_when_sqlite_is_empty(self):
+        with TemporaryDirectory() as temp_dir:
+            original_db = trade_journal.TRADE_DATABASE_FILE
+            original_file = trade_journal.TRADE_RECORD_FILE
+            trade_journal.TRADE_DATABASE_FILE = Path(temp_dir) / "trade_dataset.sqlite3"
+            trade_journal.TRADE_RECORD_FILE = Path(temp_dir) / "trade_records.csv"
+
+            try:
+                record = build_trade_record(
+                    record_id="backup-only-1",
+                    stock_code="002466",
+                    stock_name="天齐锂业",
+                    trade_date="2026-07-27",
+                    trade_type="日内T",
+                    direction="买入并卖出",
+                    buy_price=44.76,
+                    sell_price=45.24,
+                    quantity=100,
+                    recorded_at=datetime(2026, 7, 27, 13, 41, 39),
+                )
+                trade_journal.write_trade_records_backup(
+                    pd.DataFrame([record]),
+                    trade_journal.TRADE_RECORD_FILE,
+                )
+
+                df = trade_journal.sync_trade_records_backup(trade_journal.TRADE_RECORD_FILE)
+                reloaded = load_trade_records(trade_journal.TRADE_RECORD_FILE)
+
+                self.assertEqual(len(df), 1)
+                self.assertEqual(len(reloaded), 1)
+                self.assertEqual(reloaded.iloc[0]["记录ID"], "backup-only-1")
+            finally:
+                trade_journal.TRADE_DATABASE_FILE = original_db
+                trade_journal.TRADE_RECORD_FILE = original_file
 
 
 if __name__ == "__main__":

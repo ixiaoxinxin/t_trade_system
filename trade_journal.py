@@ -156,6 +156,33 @@ def load_trade_records_from_sqlite() -> pd.DataFrame:
     return df[TRADE_RECORD_COLUMNS].copy()
 
 
+def write_trade_records_backup(df: pd.DataFrame, path: Path = TRADE_RECORD_FILE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup_df = df.copy()
+
+    for col in TRADE_RECORD_COLUMNS:
+        if col not in backup_df.columns:
+            backup_df[col] = ""
+
+    backup_df = backup_df[TRADE_RECORD_COLUMNS]
+    backup_df.to_csv(path, index=False, encoding="utf-8-sig")
+
+
+def sync_trade_records_backup(path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
+    df = load_trade_records_from_sqlite()
+    if df.empty and path.exists():
+        backup_df = pd.read_csv(path, dtype={"股票代码": str})
+        if not backup_df.empty:
+            for col in TRADE_RECORD_COLUMNS:
+                if col not in backup_df.columns:
+                    backup_df[col] = ""
+            backup_df["股票代码"] = backup_df["股票代码"].apply(normalize_optional_code)
+            return backup_df[TRADE_RECORD_COLUMNS].copy()
+
+    write_trade_records_backup(df, path)
+    return df
+
+
 def append_trade_record_to_sqlite(record: dict) -> pd.DataFrame:
     ensure_trade_record_table()
     db_record = {db_col: record.get(cn_col, "") for cn_col, db_col in CN_TO_DB_COLUMNS.items()}
@@ -316,7 +343,9 @@ def load_trade_records(path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
 
 def append_trade_record(record: dict, path: Path = TRADE_RECORD_FILE) -> pd.DataFrame:
     if default_sqlite_enabled(path):
-        return append_trade_record_to_sqlite(record)
+        next_df = append_trade_record_to_sqlite(record)
+        write_trade_records_backup(next_df, path)
+        return next_df
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -340,7 +369,9 @@ def update_trade_record(record: dict, path: Path = TRADE_RECORD_FILE) -> pd.Data
         raise ValueError("记录ID不能为空")
 
     if default_sqlite_enabled(path):
-        return append_trade_record_to_sqlite(record)
+        next_df = append_trade_record_to_sqlite(record)
+        write_trade_records_backup(next_df, path)
+        return next_df
 
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_trade_records(path)
