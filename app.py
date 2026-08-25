@@ -25,6 +25,7 @@ import streamlit as st
 
 from fixed_holdings import fixed_holding_codes, fixed_holding_name_map, mark_fixed_holdings, sort_fixed_holdings_first
 from common import normalize_code, safe_float
+from scheduled_refresh import read_state as read_scheduled_refresh_state
 from sqlite_store import load_dataframe, load_document, migrate_local_files_to_sqlite
 from trade_journal import (
     append_trade_record,
@@ -251,6 +252,26 @@ def keep_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 
     existing = [col for col in columns if col in df.columns]
     return df[existing].copy()
+
+
+def render_scheduled_refresh_status() -> None:
+    state = read_scheduled_refresh_state()
+    schedule_text = "；".join(
+        f"{item.get('time')} {item.get('name')}"
+        for item in state.get("schedule", [])
+    )
+    last_success = state.get("last_success")
+    if state.get("running"):
+        status_text = f"运行中：{state.get('last_job', '')}，开始于 {state.get('last_started_at', '')}"
+    elif last_success is True:
+        status_text = f"最近完成：{state.get('last_job', '')}，{state.get('last_finished_at', '')}"
+    elif last_success is False:
+        status_text = f"最近失败：{state.get('last_job', '')}，失败命令：{state.get('last_error', '')}"
+    else:
+        status_text = "等待首次自动刷新"
+
+    st.caption(f"后台自动刷新：{schedule_text}")
+    st.caption(status_text)
 
 
 def parse_price_input(value: str) -> float:
@@ -1023,6 +1044,7 @@ st.title("A股隔日T选股系统")
 
 st.caption("工作流版：今日能不能做 → 明天看哪几只 → 实盘怎么处理 → 结果沉淀到数据集")
 st.info("使用主线：先看最终操作，再看单票依据；模型概率只辅助排序和风控，不替代规则。")
+render_scheduled_refresh_status()
 
 st.divider()
 

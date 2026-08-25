@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.xiaoxinxin.t-trade-system</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/xiaoxinxin/t_trade_system/scripts/start_streamlit_app.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/xiaoxinxin/t_trade_system</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/xiaoxinxin/t_trade_system/logs/launchagent.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/xiaoxinxin/t_trade_system/logs/launchagent.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/miniconda3/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>
