@@ -18,6 +18,7 @@ from common import load_yaml_config, normalize_code, safe_float
 from data_provider import get_all_stocks, get_stock_daily, get_stock_minute, get_stock_realtime_quote
 from fixed_holdings import FIXED_HOLDINGS
 from llm_labeler import load_local_env
+from mobile_push import build_mobile_opening_levels_html, send_pushplus_message
 
 
 OUTPUT_CSV = Path("output/opening_levels.csv")
@@ -496,6 +497,7 @@ def run_opening_levels(stock_code: str | None = None, stock_name: str | None = N
     write_report(df, api_usage)
     print(f"开盘支撑压力已生成：{OUTPUT_CSV}")
     print(df.to_string(index=False))
+    send_pushplus_message("A股隔日T开盘区间", build_mobile_opening_levels_html(df))
     return df
 
 

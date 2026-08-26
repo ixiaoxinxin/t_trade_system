@@ -16,7 +16,6 @@ from pathlib import Path
 from datetime import datetime
 import json
 import os
-from urllib.request import Request, urlopen
 
 import pandas as pd
 
@@ -24,6 +23,7 @@ from data_provider import get_stock_minute, get_stock_realtime_quote
 from common import load_yaml_config, normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
 from fixed_holdings import enrich_watchlist_with_fixed_holdings
+from mobile_push import build_mobile_sell_signal_html, send_pushplus_message as send_mobile_pushplus_message
 
 
 FINAL_WATCHLIST_FILE = Path("output/final_watchlist.csv")
@@ -528,45 +528,8 @@ def build_markdown(signal_df: pd.DataFrame) -> str:
     return md
 
 
-def send_pushplus_message(title: str, content: str) -> bool:
-    if not CONFIG["pushplus"]["enabled"]:
-        print("PushPlus 未启用。")
-        return False
-
-    token = CONFIG["pushplus"]["token"]
-
-    if not token:
-        print("PushPlus token 为空，跳过推送。")
-        return False
-
-    payload = {
-        "token": token,
-        "title": title,
-        "content": content,
-        "template": "markdown",
-    }
-
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-
-    req = Request(
-        CONFIG["pushplus"]["url"],
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0",
-        },
-        method="POST",
-    )
-
-    try:
-        with urlopen(req, timeout=10) as response:
-            raw = response.read().decode("utf-8", errors="ignore")
-            print(f"PushPlus 返回：{raw}")
-            return True
-
-    except Exception as e:
-        print(f"PushPlus 推送失败：{e}")
-        return False
+def send_pushplus_message(title: str, content: str, template: str = "html") -> bool:
+    return send_mobile_pushplus_message(title=title, content=content, template=template)
 
 
 def run_sell_signal_engine() -> None:
@@ -591,7 +554,7 @@ def run_sell_signal_engine() -> None:
 
     send_pushplus_message(
         title="A股隔日T卖点信号",
-        content=md,
+        content=build_mobile_sell_signal_html(signal_df),
     )
 
 
