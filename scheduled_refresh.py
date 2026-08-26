@@ -21,6 +21,17 @@ COMMAND_TIMEOUT_SECONDS = 60 * 45
 
 SCHEDULED_JOBS = [
     {
+        "time": "09:25",
+        "name": "集合竞价开盘区间刷新",
+        "commands": [
+            "market",
+            "holdings-refresh",
+            "opening-levels",
+            "holdings-signals",
+            "sell",
+        ],
+    },
+    {
         "time": "09:39",
         "name": "开盘计划刷新",
         "commands": [

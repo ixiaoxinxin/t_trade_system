@@ -2336,12 +2336,17 @@ def render_opening_levels_panel() -> None:
     st.subheader("开盘T区间")
     st.caption("固定持仓先看这里：支撑位、压力位、买进区间、卖出区间。AI只做辅助解释，最终按行情和纪律执行。")
 
-    col1, col2 = st.columns([1, 2])
+    col1, col2, col3 = st.columns([1.1, 2.2, 1.1], vertical_alignment="bottom")
     with col1:
         if st.button("刷新固定持仓开盘区间", key="refresh_opening_levels", width="stretch"):
             run_main_command_and_refresh("opening-levels")
     with col2:
-        stock_text = st.text_input("单票计算", placeholder="输入股票名称或代码，例如 华友钴业 / 603799")
+        stock_text = st.text_input(
+            "单票计算",
+            placeholder="输入股票名称或代码，例如 华友钴业 / 603799",
+            label_visibility="collapsed",
+        )
+    with col3:
         if st.button("计算单票开盘区间", key="refresh_single_opening_levels", width="stretch"):
             run_main_command_with_stock_and_refresh("opening-levels", stock_text)
 
