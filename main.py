@@ -35,6 +35,11 @@ COMMANDS = {
         "runner": ("report_generator", "generate_daily_plan"),
         "outputs": ["output/daily_plan.md"],
     },
+    "opening-levels": {
+        "description": "生成固定持仓开盘支撑压力与T区间",
+        "runner": ("opening_levels", "run_opening_levels"),
+        "outputs": ["output/opening_levels.csv", "output/opening_levels.md"],
+    },
     "lunch": {
         "description": "生成午盘验证报告",
         "runner": ("lunch_validator", "run_lunch_validation"),
@@ -182,7 +187,7 @@ def call_runner(command_name: str, max_count: int | None = None, stock_code: str
 
         if command_name == "candidates":
             runner(max_count=max_count)
-        elif command_name in ["model-predict", "probability-predict", "single-stock"]:
+        elif command_name in ["model-predict", "probability-predict", "single-stock", "opening-levels"]:
             runner(stock_code=stock_code)
         else:
             runner()
@@ -230,7 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stock-code",
         default=None,
-        help="model-predict/probability-predict/single-stock 使用，指定单只股票代码。",
+        help="model-predict/probability-predict/single-stock/opening-levels 使用，指定单只股票代码或名称。",
     )
 
     return parser

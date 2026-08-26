@@ -14,6 +14,10 @@ class ScheduledRefreshTest(unittest.TestCase):
 
         self.assertEqual(schedule_times, ["09:39", "14:00", "14:30", "15:00"])
 
+    def test_schedule_refreshes_opening_levels(self):
+        for job in SCHEDULED_JOBS:
+            self.assertIn("opening-levels", job["commands"])
+
     def test_due_jobs_runs_missed_jobs_once_per_day(self):
         state = default_state()
         current = datetime(2026, 8, 25, 14, 1)

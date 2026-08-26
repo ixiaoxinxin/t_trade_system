@@ -85,6 +85,8 @@ SINGLE_STOCK_DECISION_FILE = Path("output/single_stock_decision.csv")
 SINGLE_STOCK_DECISION_MD_FILE = Path("output/single_stock_decision.md")
 FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
+OPENING_LEVELS_FILE = Path("output/opening_levels.csv")
+OPENING_LEVELS_MD_FILE = Path("output/opening_levels.md")
 
 
 st.set_page_config(
@@ -156,6 +158,30 @@ def run_single_script_and_refresh(script_name: str) -> None:
 def run_main_command_and_refresh(command_name: str) -> None:
     with st.status(f"正在执行 {command_name} ...", expanded=True) as status:
         success, stdout, stderr = run_command(["main.py", command_name])
+
+        show_script_result(command_name, success, stdout, stderr)
+
+        if success:
+            migrate_local_files_to_sqlite()
+            status.update(
+                label=f"{command_name} 执行完成，正在刷新页面...",
+                state="complete",
+            )
+            time.sleep(1)
+            st.rerun()
+        else:
+            status.update(
+                label=f"{command_name} 执行失败",
+                state="error",
+            )
+
+
+def run_main_command_with_stock_and_refresh(command_name: str, stock_text: str) -> None:
+    with st.status(f"正在执行 {command_name} ...", expanded=True) as status:
+        args = ["main.py", command_name]
+        if stock_text.strip():
+            args.extend(["--stock-code", stock_text.strip()])
+        success, stdout, stderr = run_command(args)
 
         show_script_result(command_name, success, stdout, stderr)
 
@@ -950,7 +976,7 @@ def render_fixed_holding_snapshot(
     prediction_df: pd.DataFrame,
 ) -> None:
     st.subheader("固定持仓监控")
-    st.caption("融捷股份、云天化、大为股份、神火股份、天齐锂业单独成表。先看买点区间和卖点信号，再看午盘/次日结果。")
+    st.caption("大为股份、京东方A、华友钴业、捷捷微电单独成表。先看开盘T区间，再看卖点信号和午盘/次日结果。")
 
     signal_df = load_csv(FIXED_HOLDINGS_SIGNAL_FILE)
     signal_df = add_profit_probability(add_model_probability(signal_df, prediction_df), profit_probability_df)
@@ -1119,6 +1145,7 @@ prediction_review_df = load_csv(PREDICTION_REVIEW_FILE)
 model_scorecard_df = load_csv(MODEL_SCORECARD_FILE)
 final_decision_df = load_csv(FINAL_DECISION_FILE)
 single_stock_decision_df = load_csv(SINGLE_STOCK_DECISION_FILE)
+opening_levels_df = load_csv(OPENING_LEVELS_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -1135,6 +1162,7 @@ prediction_review_report_md = load_markdown(PREDICTION_REVIEW_REPORT_FILE)
 daily_model_report_md = load_markdown(DAILY_MODEL_REPORT_FILE)
 final_decision_md = load_markdown(FINAL_DECISION_MD_FILE)
 single_stock_decision_md = load_markdown(SINGLE_STOCK_DECISION_MD_FILE)
+opening_levels_md = load_markdown(OPENING_LEVELS_MD_FILE)
 
 final_df = mark_fixed_holdings(final_df)
 sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
@@ -2304,7 +2332,58 @@ def render_single_stock_panel() -> None:
             st.markdown(single_stock_decision_md)
 
 
-tab_plan, tab_holdings, tab_single_stock, tab_trade_records, tab_lunch, tab_next_day, tab_model_train, tab_model_predict = st.tabs([
+def render_opening_levels_panel() -> None:
+    st.subheader("开盘T区间")
+    st.caption("固定持仓先看这里：支撑位、压力位、买进区间、卖出区间。AI只做辅助解释，最终按行情和纪律执行。")
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if st.button("刷新固定持仓开盘区间", key="refresh_opening_levels", width="stretch"):
+            run_main_command_and_refresh("opening-levels")
+    with col2:
+        stock_text = st.text_input("单票计算", placeholder="输入股票名称或代码，例如 华友钴业 / 603799")
+        if st.button("计算单票开盘区间", key="refresh_single_opening_levels", width="stretch"):
+            run_main_command_with_stock_and_refresh("opening-levels", stock_text)
+
+    if opening_levels_df.empty:
+        st.info("暂无开盘区间，请点击刷新固定持仓开盘区间。")
+        return
+
+    show_table(
+        "固定持仓开盘支撑压力",
+        keep_columns(
+            opening_levels_df,
+            [
+                "操作",
+                "股票名称",
+                "股票代码",
+                "支撑位",
+                "压力位",
+                "买进区间",
+                "卖出区间",
+                "集合竞价价",
+                "当前价",
+                "AI辅助",
+                "算法依据",
+                "历史T次数",
+                "历史T胜率",
+                "历史T均收益率",
+                "次日上涨概率",
+                "达到1%概率",
+                "止损概率",
+                "实时行情时间",
+                "状态",
+            ],
+        ),
+    )
+
+    if opening_levels_md:
+        with st.expander("展开计算报告", expanded=False):
+            st.markdown(opening_levels_md)
+
+
+tab_opening, tab_plan, tab_holdings, tab_single_stock, tab_trade_records, tab_lunch, tab_next_day, tab_model_train, tab_model_predict = st.tabs([
+    "开盘T区间",
     "明日计划",
     "固定持仓",
     "单票决策",
@@ -2314,6 +2393,10 @@ tab_plan, tab_holdings, tab_single_stock, tab_trade_records, tab_lunch, tab_next
     "模型训练",
     "模型预测",
 ])
+
+
+with tab_opening:
+    render_opening_levels_panel()
 
 
 with tab_plan:

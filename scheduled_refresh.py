@@ -29,6 +29,7 @@ SCHEDULED_JOBS = [
             "tail",
             "plan",
             "holdings-refresh",
+            "opening-levels",
             "holdings-signals",
             "sell",
             "model-predict",
@@ -42,6 +43,7 @@ SCHEDULED_JOBS = [
         "commands": [
             "market",
             "holdings-refresh",
+            "opening-levels",
             "holdings-signals",
             "sell",
             "lunch",
@@ -56,6 +58,7 @@ SCHEDULED_JOBS = [
         "commands": [
             "market",
             "holdings-refresh",
+            "opening-levels",
             "holdings-signals",
             "sell",
             "lunch",
@@ -70,6 +73,7 @@ SCHEDULED_JOBS = [
         "commands": [
             "market",
             "holdings-refresh",
+            "opening-levels",
             "holdings-signals",
             "sell",
             "lunch",
