@@ -4,6 +4,7 @@
 """A股隔日T选股系统 Streamlit 页面入口。"""
 
 from pathlib import Path
+import os
 import subprocess
 import sys
 import time
@@ -96,6 +97,30 @@ st.set_page_config(
     page_title="A股隔日T选股系统",
     layout="wide"
 )
+
+
+@st.cache_resource(show_spinner=False)
+def start_scheduled_refresh_daemon() -> dict[str, str]:
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "scheduled_refresh.py", "--daemon"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return {"status": "started", "pid": str(process.pid)}
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+def ensure_in_app_scheduler() -> None:
+    enabled = os.getenv("ENABLE_IN_APP_SCHEDULER", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return
+    start_scheduled_refresh_daemon()
+
+
+ensure_in_app_scheduler()
 
 st.markdown(
     """

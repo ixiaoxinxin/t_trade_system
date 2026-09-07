@@ -10,6 +10,8 @@ services:
         value: Asia/Shanghai
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: ENABLE_IN_APP_SCHEDULER
+        value: "false"
       - key: DEEPSEEK_API_KEY
         sync: false
       - key: PUSHPLUS_TOKEN

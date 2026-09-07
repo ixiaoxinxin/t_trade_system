@@ -17,6 +17,18 @@
 - `DEEPSEEK_API_KEY`：DS 分析用。
 - `PUSHPLUS_TOKEN`：手机推送用。
 
+Render 会读取 `Dockerfile` 和 `render.yaml`，后台刷新守护进程由 Docker 启动，不需要额外打开 `ENABLE_IN_APP_SCHEDULER`。
+
+## 备用部署方式
+
+如果临时使用 Streamlit Community Cloud：
+
+- Main file path 填 `app.py`。
+- Python 版本读取 `runtime.txt`。
+- 系统依赖读取 `packages.txt`。
+- Secrets/环境变量需要配置 `DEEPSEEK_API_KEY`、`PUSHPLUS_TOKEN`、`TZ=Asia/Shanghai`。
+- 如果需要页面进程自动拉起后台刷新，额外配置 `ENABLE_IN_APP_SCHEDULER=true`。
+
 ## 自动刷新时间
 
 后台按北京时间执行：
