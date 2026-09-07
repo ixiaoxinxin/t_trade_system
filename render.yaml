@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: t-trade-system
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: TZ
+        value: Asia/Shanghai
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: PUSHPLUS_TOKEN
+        sync: false

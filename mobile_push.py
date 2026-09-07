@@ -20,7 +20,7 @@ CONFIG_FILE = Path("config.yaml")
 DEFAULT_PUSHPLUS_CONFIG = {
     "enabled": True,
     "url": "https://www.pushplus.plus/send",
-    "token": os.getenv("PUSHPLUS_TOKEN", "b75b94a8e3ac44db9237ad16c3a4b170"),
+    "token": os.getenv("PUSHPLUS_TOKEN", ""),
 }
 
 

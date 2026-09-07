@@ -464,6 +464,27 @@ def calculate_review(row: pd.Series) -> dict | None:
         execution_result = "需分时确认"
 
     success = execution_result == "给买点且成功"
+    system_buy_price = plan_buy_price if touched_buy_range else 0
+    if not touched_buy_range:
+        system_sell_price = 0
+        system_profit = 0
+        closure = "未触达买点，未成交"
+    elif execution_result == "风险触发":
+        system_sell_price = plan_stop_loss_price
+        system_profit = (system_sell_price - system_buy_price) * 300
+        closure = "买入后触发止损"
+    elif execution_result == "给买点且成功":
+        system_sell_price = plan_target_1_price
+        system_profit = (system_sell_price - system_buy_price) * 300
+        closure = "买入后达到1%目标"
+    elif execution_result == "需分时确认":
+        system_sell_price = 0
+        system_profit = 0
+        closure = "收益/止损时序不明"
+    else:
+        system_sell_price = next_close
+        system_profit = (system_sell_price - system_buy_price) * 300
+        closure = "买入后未达目标，按收盘估算"
 
     if intraday["first_event"] == "minute_missing" and not ohlc_needs_sequence:
         sequence_judgement = "日线OHLC未出现收益/止损冲突，按计划买入价做保守验证。"
@@ -489,6 +510,11 @@ def calculate_review(row: pd.Series) -> dict | None:
         "计划低吸上限": round(plan_buy_high, 2),
         "计划验证买入价": round(plan_buy_price, 2),
         "计划止损价": round(plan_stop_loss_price, 2),
+        "系统模拟股数": 300,
+        "系统模拟买入价": round(system_buy_price, 2),
+        "系统模拟卖出价": round(system_sell_price, 2),
+        "系统模拟利润": round(system_profit, 2),
+        "系统闭环结果": closure,
         "次日日期": str(pd.to_datetime(next_date).date()) if pd.notna(next_date) else "",
         "次日开盘": round(next_open, 2),
         "次日最高": round(next_high, 2),

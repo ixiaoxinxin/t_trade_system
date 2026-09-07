@@ -12,7 +12,10 @@ class ScheduledRefreshTest(unittest.TestCase):
     def test_schedule_includes_close_refresh_at_1500(self):
         schedule_times = [job["time"] for job in SCHEDULED_JOBS]
 
-        self.assertEqual(schedule_times, ["09:25", "09:39", "14:00", "14:30", "15:00"])
+        self.assertEqual(
+            schedule_times,
+            ["09:25", "09:33", "09:39", "09:40", "10:00", "10:50", "13:30", "14:00", "14:30", "15:00"],
+        )
 
     def test_schedule_refreshes_opening_levels(self):
         for job in SCHEDULED_JOBS:
@@ -24,12 +27,12 @@ class ScheduledRefreshTest(unittest.TestCase):
 
         jobs = due_jobs(state, current)
 
-        self.assertEqual([job["time"] for job in jobs], ["09:25", "09:39", "14:00"])
+        self.assertEqual([job["time"] for job in jobs], ["09:25", "09:33", "09:39", "09:40", "10:00", "10:50", "13:30", "14:00"])
 
         state["last_runs"][job_key(jobs[0])] = "2026-08-25"
         jobs_after_first_run = due_jobs(state, current)
 
-        self.assertEqual([job["time"] for job in jobs_after_first_run], ["09:39", "14:00"])
+        self.assertEqual([job["time"] for job in jobs_after_first_run], ["09:33", "09:39", "09:40", "10:00", "10:50", "13:30", "14:00"])
 
     def test_auction_job_is_due_after_0925(self):
         state = default_state()

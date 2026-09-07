@@ -1,9 +1,9 @@
+.git
+.venv
 __pycache__/
 *.pyc
-.venv/
 .DS_Store
 .env
-.streamlit/secrets.toml
-cache/minute/*.csv
+cache/daily/
 docs/.obsidian/
 logs/

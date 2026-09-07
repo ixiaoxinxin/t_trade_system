@@ -1,0 +1,11 @@
+[server]
+headless = true
+address = "0.0.0.0"
+fileWatcherType = "none"
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"

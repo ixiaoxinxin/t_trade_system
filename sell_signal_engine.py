@@ -22,7 +22,6 @@ import pandas as pd
 from data_provider import get_stock_minute, get_stock_realtime_quote
 from common import load_yaml_config, normalize_code, safe_float
 from contracts import FINAL_WATCHLIST_REQUIRED_COLUMNS, validate_csv_columns
-from fixed_holdings import enrich_watchlist_with_fixed_holdings
 from mobile_push import build_mobile_sell_signal_html, send_pushplus_message as send_mobile_pushplus_message
 
 
@@ -52,8 +51,7 @@ DEFAULT_CONFIG = {
     "pushplus": {
         "enabled": True,
         "url": "https://www.pushplus.plus/send",
-        # 优先使用环境变量；如果没有环境变量，则使用你提供的 token
-        "token": os.getenv("PUSHPLUS_TOKEN", "b75b94a8e3ac44db9237ad16c3a4b170"),
+        "token": os.getenv("PUSHPLUS_TOKEN", ""),
     },
 }
 
@@ -427,7 +425,11 @@ def build_sell_signal() -> pd.DataFrame:
     )
 
     df["股票代码"] = df["股票代码"].apply(normalize_code)
-    df = enrich_watchlist_with_fixed_holdings(df, include_grades=CONFIG["include_grades"])
+    if "隔夜建议等级" in df.columns:
+        df = df[df["隔夜建议等级"].isin(CONFIG["include_grades"])].copy()
+    df["固定持仓"] = "否"
+    df["置顶原因"] = ""
+    df["行情刷新状态"] = "明日计划候选"
 
     market_env = load_market_environment()
 
@@ -454,12 +456,10 @@ def build_sell_signal() -> pd.DataFrame:
 
     signal_df["_rank"] = signal_df["卖出信号"].map(signal_order).fillna(9)
 
-    signal_df["_fixed_rank"] = signal_df.get("固定持仓", "否").astype(str).eq("是").map({True: 0, False: 1})
-
     signal_df = signal_df.sort_values(
-        by=["_fixed_rank", "_rank", "当前涨幅", "最高涨幅"],
-        ascending=[True, True, False, False],
-    ).drop(columns=["_fixed_rank", "_rank"]).reset_index(drop=True)
+        by=["_rank", "当前涨幅", "最高涨幅"],
+        ascending=[True, False, False],
+    ).drop(columns=["_rank"]).reset_index(drop=True)
 
     return signal_df
 
@@ -553,7 +553,7 @@ def run_sell_signal_engine() -> None:
     print(f"信号数量：{len(signal_df)}")
 
     send_pushplus_message(
-        title="A股隔日T卖点信号",
+        title="A股隔日T候选卖点信号",
         content=build_mobile_sell_signal_html(signal_df),
     )
 

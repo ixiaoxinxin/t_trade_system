@@ -10,18 +10,122 @@ import pandas as pd
 
 from common import normalize_code, safe_float
 from data_provider import get_stock_daily, get_stock_minute, get_stock_realtime_quote
+from ds_analysis import call_ds_analysis, compact_records
 
 
 FIXED_HOLDINGS = [
     {"股票代码": "002213", "股票名称": "大为股份"},
-    {"股票代码": "000725", "股票名称": "京东方A"},
-    {"股票代码": "603799", "股票名称": "华友钴业"},
+    {"股票代码": "002192", "股票名称": "融捷股份"},
     {"股票代码": "300623", "股票名称": "捷捷微电"},
 ]
 
 FIXED_REASON = "固定持仓每日跟踪"
 FIXED_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 FIXED_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
+MODEL_PREDICTION_FILE = Path("output/model_predictions_v2.6.csv")
+PROFIT_PROBABILITY_FILE = Path("output/profit_probabilities_v2.7.csv")
+
+
+def read_model_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path, dtype={"stock_code": str, "股票代码": str})
+
+
+def enrich_fixed_signals_with_model(signal_df: pd.DataFrame) -> pd.DataFrame:
+    if signal_df.empty or "股票代码" not in signal_df.columns:
+        return signal_df
+    result = signal_df.copy()
+    result["股票代码"] = result["股票代码"].apply(normalize_code)
+
+    prediction_df = read_model_csv(MODEL_PREDICTION_FILE)
+    if not prediction_df.empty and "stock_code" in prediction_df.columns:
+        pred = prediction_df.copy()
+        pred["股票代码"] = pred["stock_code"].apply(normalize_code)
+        sort_col = "predict_date" if "predict_date" in pred.columns else pred.columns[0]
+        pred = pred.sort_values(sort_col).drop_duplicates("股票代码", keep="last")
+        pred = pred.rename(columns={
+            "next_day_up_probability": "次日上涨概率",
+            "direction_confidence": "方向置信度",
+            "predicted_direction": "模型方向",
+        })
+        keep = [col for col in ["股票代码", "次日上涨概率", "方向置信度", "模型方向"] if col in pred.columns]
+        result = result.merge(pred[keep], on="股票代码", how="left")
+
+    probability_df = read_model_csv(PROFIT_PROBABILITY_FILE)
+    if not probability_df.empty and "stock_code" in probability_df.columns:
+        prob = probability_df.copy()
+        prob["股票代码"] = prob["stock_code"].apply(normalize_code)
+        sort_col = "predict_date" if "predict_date" in prob.columns else prob.columns[0]
+        prob = prob.sort_values(sort_col).drop_duplicates("股票代码", keep="last")
+        prob = prob.rename(columns={
+            "hit_1pct_probability": "达到1%概率",
+            "hit_2pct_probability": "达到2%概率",
+            "stop_2pct_probability": "止损概率",
+            "final_probability_signal": "概率信号",
+        })
+        keep = [col for col in ["股票代码", "达到1%概率", "达到2%概率", "止损概率", "概率信号"] if col in prob.columns]
+        result = result.merge(prob[keep], on="股票代码", how="left")
+
+    return result
+
+
+def fallback_fixed_signal_ds(signal_df: pd.DataFrame) -> dict[str, str]:
+    if signal_df.empty:
+        return {
+            "DS固定持仓判断": "固定持仓数据不足，先刷新行情。",
+            "DS固定持仓动作": "不加仓，等买卖点刷新。",
+            "DS固定持仓风险": "实时价缺失时不做判断。",
+        }
+    risk_rows = signal_df[signal_df.get("卖点信号", pd.Series(dtype=str)).astype(str).isin(["止损", "清仓", "减仓"])]
+    if not risk_rows.empty:
+        names = "、".join(risk_rows["股票名称"].astype(str).head(3).tolist())
+        action = f"{names} 先按卖点纪律处理。"
+    else:
+        action = "暂无强卖点，先看回落到买点区。"
+    return {
+        "DS固定持仓判断": "固定持仓先看卖点纪律，再看买点回补。",
+        "DS固定持仓动作": action,
+        "DS固定持仓风险": "跌破回补区不补仓，等止跌。",
+    }
+
+
+def build_fixed_signal_ds(signal_df: pd.DataFrame) -> tuple[dict[str, str], str]:
+    fallback = fallback_fixed_signal_ds(signal_df)
+    payload = {
+        "任务": "结合固定持仓买卖点和模型概率输出实盘短指令",
+        "固定持仓": compact_records(
+            signal_df,
+            [
+                "股票名称",
+                "股票代码",
+                "当前价",
+                "当前涨幅",
+                "买点状态",
+                "买点下限",
+                "买点上限",
+                "卖点信号",
+                "卖点理由",
+                "次日上涨概率",
+                "达到1%概率",
+                "止损概率",
+                "概率信号",
+                "实时行情时间",
+            ],
+            limit=6,
+        ),
+    }
+    system_prompt = (
+        "你是A股固定持仓盘中辅助员。只根据提供数据输出严格JSON，字段为："
+        "DS固定持仓判断、DS固定持仓动作、DS固定持仓风险。"
+        "每个字段不超过48个中文字符；不编造价格；不展示计算过程；必须适合盘中快速执行。"
+    )
+    return call_ds_analysis(
+        prompt_version="v4.02_fixed_holding_signal_ds",
+        system_prompt=system_prompt,
+        payload=payload,
+        fallback=fallback,
+    )
 
 
 def fixed_holding_codes() -> set[str]:
@@ -247,11 +351,15 @@ def run_fixed_holding_trade_signals() -> pd.DataFrame:
             "分钟状态": minute_status,
         })
 
-    df = pd.DataFrame(rows)
+    df = enrich_fixed_signals_with_model(pd.DataFrame(rows))
+    ds_result, ds_status = build_fixed_signal_ds(df)
+    for key, value in ds_result.items():
+        df[key] = value
+    df["DS状态"] = ds_status
     FIXED_SIGNAL_FILE.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(FIXED_SIGNAL_FILE, index=False, encoding="utf-8-sig")
     print(f"固定持仓买卖点刷新完成：{FIXED_SIGNAL_FILE}")
-    print(df.to_string(index=False))
+    print(df[["股票名称", "当前价", "买点状态", "卖点信号", "DS状态"]].to_string(index=False))
     return df
 
 

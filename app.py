@@ -1,19 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 
-"""
-A股隔日T选股系统 Streamlit 精简版
-
-升级点：
-1. 页面继续降噪，删除高低点/最高涨幅/最低涨幅等冗余展示
-2. 次日验证拆分为：验证成功 / 验证失败或待优化
-3. 已购买股票优先展示
-4. 市场环境增加板块资金方向展示
-5. 原始 Markdown 报告默认折叠
-6. 页面按真实交易工作流重组
-7. 人工复盘入口下线，复盘沉淀以真实交易记录为准
-8. 页面按工作流拆成独立一级 Tab，固定持仓、交易记录、午盘、模型训练、模型预测分开验收
-"""
+"""A股隔日T选股系统 Streamlit 页面入口。"""
 
 from pathlib import Path
 import subprocess
@@ -22,6 +10,11 @@ import time
 
 import pandas as pd
 import streamlit as st
+
+try:
+    import streamlit_antd_components as sac
+except Exception:
+    sac = None
 
 from fixed_holdings import fixed_holding_codes, fixed_holding_name_map, mark_fixed_holdings, sort_fixed_holdings_first
 from common import normalize_code, safe_float
@@ -87,11 +80,97 @@ FIXED_HOLDINGS_SIGNAL_FILE = Path("output/fixed_holdings_signals.csv")
 FIXED_HOLDINGS_REFRESH_FILE = Path("output/fixed_holdings_refresh.csv")
 OPENING_LEVELS_FILE = Path("output/opening_levels.csv")
 OPENING_LEVELS_MD_FILE = Path("output/opening_levels.md")
+T_MODE_DECISION_FILE = Path("output/t_mode_decision.csv")
+T_MODE_DECISION_MD_FILE = Path("output/t_mode_decision.md")
+METAL_MACRO_FILE = Path("output/metal_macro_snapshot.csv")
+METAL_MACRO_MD_FILE = Path("output/metal_macro_report.md")
+PREOPEN_PREDICTION_FILE = Path("output/preopen_prediction.csv")
+PREOPEN_PREDICTION_MD_FILE = Path("output/preopen_prediction.md")
+SECTOR_ROTATION_FILE = Path("output/sector_rotation.csv")
+SECTOR_ROTATION_MD_FILE = Path("output/sector_rotation_report.md")
+PERFORMANCE_REPORT_FILE = Path("output/performance_report.csv")
+PERFORMANCE_REPORT_MD_FILE = Path("output/performance_report.md")
 
 
 st.set_page_config(
     page_title="A股隔日T选股系统",
     layout="wide"
+)
+
+st.markdown(
+    """
+    <style>
+    #MainMenu, footer {
+        visibility: hidden;
+    }
+    section[data-testid="stSidebar"] {
+        min-width: 260px !important;
+        width: 260px !important;
+    }
+    .block-container {
+        padding-top: 2rem;
+        max-width: 100%;
+    }
+    div[data-testid="stDataFrame"] {
+        border-radius: 8px;
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    div[data-testid="stMetric"] {
+        min-width: 120px;
+    }
+    .stButton button {
+        min-height: 44px;
+        white-space: normal;
+    }
+    @media (max-width: 900px) {
+        section[data-testid="stSidebar"] {
+            min-width: 224px !important;
+            width: 224px !important;
+        }
+        .block-container {
+            padding: 1rem 0.75rem 2rem;
+        }
+        h1 {
+            font-size: 2rem !important;
+            line-height: 1.2 !important;
+        }
+        h2 {
+            font-size: 1.55rem !important;
+            line-height: 1.25 !important;
+        }
+        h3 {
+            font-size: 1.25rem !important;
+            line-height: 1.3 !important;
+        }
+        p, li, label, [data-testid="stMarkdownContainer"] {
+            font-size: 0.95rem;
+        }
+        [data-testid="column"] {
+            min-width: 0;
+        }
+        div[data-testid="stDataFrame"] {
+            border-radius: 6px;
+        }
+        div[data-testid="stMetric"] {
+            padding-bottom: 0.5rem;
+        }
+    }
+    @media (max-width: 640px) {
+        .block-container {
+            padding-left: 0.55rem;
+            padding-right: 0.55rem;
+        }
+        h1 {
+            font-size: 1.7rem !important;
+        }
+        .stButton button {
+            width: 100%;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -802,7 +881,7 @@ def sort_final_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def show_table(title: str, df: pd.DataFrame) -> None:
+def show_table(title: str, df: pd.DataFrame, height: int | None = None) -> None:
     st.subheader(title)
 
     if df.empty:
@@ -814,11 +893,49 @@ def show_table(title: str, df: pd.DataFrame) -> None:
     for col in display_df.select_dtypes(include=["object"]).columns:
         display_df[col] = display_df[col].fillna("").astype(str)
 
-    st.dataframe(
-        display_df,
-        width="stretch",
-        hide_index=True,
+    dataframe_kwargs = {
+        "width": "stretch",
+        "hide_index": True,
+    }
+    if height is not None:
+        dataframe_kwargs["height"] = height
+
+    st.dataframe(display_df, **dataframe_kwargs)
+
+
+def add_billion_columns(df: pd.DataFrame, source_col: str = "主力净流入") -> pd.DataFrame:
+    if df.empty or source_col not in df.columns:
+        return df
+
+    result = df.copy()
+    values = pd.to_numeric(result[source_col], errors="coerce")
+    result[f"{source_col}亿元"] = values.apply(lambda value: "" if pd.isna(value) else f"{value / 100000000:.2f}")
+    return result
+
+
+def keep_recent_dates(df: pd.DataFrame, date_col: str, limit: int = 3) -> pd.DataFrame:
+    if df.empty or date_col not in df.columns:
+        return df
+
+    result = df.copy()
+    dates = pd.to_datetime(result[date_col], errors="coerce")
+    result["_sort_date"] = dates
+    recent_dates = (
+        result.dropna(subset=["_sort_date"])["_sort_date"]
+        .dt.date
+        .drop_duplicates()
+        .sort_values(ascending=False)
+        .head(limit)
+        .tolist()
     )
+    if not recent_dates:
+        return result.drop(columns=["_sort_date"])
+    result = result[result["_sort_date"].dt.date.isin(recent_dates)]
+    return result.drop(columns=["_sort_date"])
+
+
+def render_action_hint(title: str, text: str) -> None:
+    st.info(f"{title}：{text}")
 
 
 def get_market_summary(market_df: pd.DataFrame) -> dict:
@@ -976,7 +1093,7 @@ def render_fixed_holding_snapshot(
     prediction_df: pd.DataFrame,
 ) -> None:
     st.subheader("固定持仓监控")
-    st.caption("大为股份、京东方A、华友钴业、捷捷微电单独成表。先看开盘T区间，再看卖点信号和午盘/次日结果。")
+    st.caption("这里只看当前持仓怎么处理。午盘/次日验证已移到模型构建的数据复盘页。")
 
     signal_df = load_csv(FIXED_HOLDINGS_SIGNAL_FILE)
     signal_df = add_profit_probability(add_model_probability(signal_df, prediction_df), profit_probability_df)
@@ -987,7 +1104,27 @@ def render_fixed_holding_snapshot(
     else:
         signal_df = add_short_reason(add_model_signal_status(signal_df))
         show_table(
-            "固定持仓买点 / 卖点",
+            "固定持仓重点数据",
+            keep_columns(
+                signal_df,
+                [
+                    "股票名称",
+                    "股票代码",
+                    "当前价",
+                    "当前涨幅",
+                    "买点下限",
+                    "买点上限",
+                    "买点状态",
+                    "卖点信号",
+                    "实时行情时间",
+                    "实时状态",
+                    "分钟状态",
+                ],
+            ),
+            height=260,
+        )
+        show_table(
+            "固定持仓操作建议",
             keep_columns(
                 signal_df,
                 [
@@ -999,67 +1136,11 @@ def render_fixed_holding_snapshot(
                     "卖点理由",
                     "买点状态",
                     "买点依据",
-                    "买点下限",
-                    "买点上限",
-                    "当前价",
-                    "实时行情时间",
-                    "实时状态",
-                    "日线状态",
-                    "分钟状态",
                     "模型状态",
                 ],
             ),
+            height=260,
         )
-
-    fixed_codes = fixed_holding_codes()
-    frames = []
-
-    for source_name, frame in [
-        ("交易池", final_df),
-        ("卖点", sell_df),
-        ("午盘", lunch_df),
-        ("次日", next_df),
-    ]:
-        if frame.empty or "股票代码" not in frame.columns:
-            continue
-
-        temp = mark_fixed_holdings(frame)
-        temp = temp[temp["股票代码"].astype(str).str.zfill(6).isin(fixed_codes)].copy()
-        if temp.empty:
-            continue
-
-        temp["来源"] = source_name
-        frames.append(temp)
-
-    if not frames:
-        st.info("固定持仓暂无卖点/午盘/次日刷新结果，请点击【更新卖点信号】、【午盘验证】或【次日复盘】。")
-        return
-
-    fixed_df = pd.concat(frames, ignore_index=True)
-    fixed_df = add_profit_probability(add_model_probability(fixed_df, prediction_df), profit_probability_df)
-    fixed_df = add_final_decision(fixed_df, final_decision_df)
-    fixed_df = add_short_reason(add_model_signal_status(add_verification_summary(fixed_df)))
-    show_table(
-        "固定持仓验证状态",
-        keep_columns(
-            fixed_df,
-            [
-                "最终操作",
-                "股票名称",
-                "股票代码",
-                "操作短句",
-                "来源",
-                "卖出信号",
-                "卖出理由",
-                "午盘涨幅",
-                "系统验证结果",
-                "复盘结论",
-                "上午结构标签",
-                "下午操作建议",
-                "模型状态",
-            ],
-        ),
-    )
 
 
 # =========================
@@ -1067,63 +1148,8 @@ def render_fixed_holding_snapshot(
 # =========================
 
 st.title("A股隔日T选股系统")
-
-st.caption("工作流版：今日能不能做 → 明天看哪几只 → 实盘怎么处理 → 结果沉淀到数据集")
-st.info("使用主线：先看最终操作，再看单票依据；模型概率只辅助排序和风控，不替代规则。")
+st.caption("按实盘操作顺序重组：数据前瞻 → 准备工作 → 日内交易 → 隔日持仓 → 交易记录 → 模型构建。")
 render_scheduled_refresh_status()
-
-st.divider()
-
-# =========================
-# 操作区
-# =========================
-
-st.subheader("日常操作")
-
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    if st.button("生成明日计划", width="stretch"):
-        run_main_pipeline_and_refresh()
-
-with col2:
-    if st.button("更新卖点信号", width="stretch"):
-        run_single_script_and_refresh("sell_signal_engine.py")
-
-with col3:
-    if st.button("午盘验证", width="stretch"):
-        run_single_script_and_refresh("lunch_validator.py")
-
-with col4:
-    if st.button("次日复盘", width="stretch"):
-        run_single_script_and_refresh("next_day_validator.py")
-
-with col5:
-    if st.button("保存训练数据", width="stretch"):
-        run_single_script_and_refresh("dataset_builder.py")
-
-with st.expander("高级工具", expanded=False):
-    tool_col1, tool_col2, tool_col3, tool_col4 = st.columns(4)
-
-    with tool_col1:
-        if st.button("单独刷新市场环境", width="stretch"):
-            run_single_script_and_refresh("market_environment.py")
-
-    with tool_col2:
-        if st.button("刷新固定持仓行情", width="stretch"):
-            run_main_command_and_refresh("holdings-refresh")
-
-    with tool_col3:
-        if st.button("刷新持仓买卖点", width="stretch"):
-            run_main_command_and_refresh("holdings-signals")
-
-    with tool_col4:
-        if st.button("迁移数据库", width="stretch"):
-            run_single_script_and_refresh("sqlite_store.py")
-
-st.caption("页面数据源：SQLite 优先；脚本产生的本地文件会在执行后自动迁移入库。")
-
-st.divider()
 
 # =========================
 # 读取数据
@@ -1146,6 +1172,11 @@ model_scorecard_df = load_csv(MODEL_SCORECARD_FILE)
 final_decision_df = load_csv(FINAL_DECISION_FILE)
 single_stock_decision_df = load_csv(SINGLE_STOCK_DECISION_FILE)
 opening_levels_df = load_csv(OPENING_LEVELS_FILE)
+t_mode_decision_df = load_csv(T_MODE_DECISION_FILE)
+metal_macro_df = load_csv(METAL_MACRO_FILE)
+preopen_prediction_df = load_csv(PREOPEN_PREDICTION_FILE)
+sector_rotation_df = load_csv(SECTOR_ROTATION_FILE)
+performance_report_df = load_csv(PERFORMANCE_REPORT_FILE)
 trade_record_df = load_trade_records(TRADE_RECORD_FILE)
 
 daily_plan_md = load_markdown(PLAN_FILE)
@@ -1163,6 +1194,11 @@ daily_model_report_md = load_markdown(DAILY_MODEL_REPORT_FILE)
 final_decision_md = load_markdown(FINAL_DECISION_MD_FILE)
 single_stock_decision_md = load_markdown(SINGLE_STOCK_DECISION_MD_FILE)
 opening_levels_md = load_markdown(OPENING_LEVELS_MD_FILE)
+t_mode_decision_md = load_markdown(T_MODE_DECISION_MD_FILE)
+metal_macro_md = load_markdown(METAL_MACRO_MD_FILE)
+preopen_prediction_md = load_markdown(PREOPEN_PREDICTION_MD_FILE)
+sector_rotation_md = load_markdown(SECTOR_ROTATION_MD_FILE)
+performance_report_md = load_markdown(PERFORMANCE_REPORT_MD_FILE)
 
 final_df = mark_fixed_holdings(final_df)
 sell_signal_df = sort_fixed_holdings_first(mark_fixed_holdings(sell_signal_df))
@@ -1592,8 +1628,13 @@ def render_trade_plan_panel() -> None:
     st.subheader("明日计划")
     st.caption("这里只看明天怎么做。固定持仓看处理动作，候选池看是否值得关注。")
 
-    if st.button("刷新最终决策", key="refresh_final_decision", width="stretch"):
-        run_main_command_and_refresh("decision-fusion")
+    plan_col1, plan_col2 = st.columns(2)
+    with plan_col1:
+        if st.button("生成明日计划", key="generate_daily_plan", width="stretch"):
+            run_main_pipeline_and_refresh()
+    with plan_col2:
+        if st.button("刷新最终决策", key="refresh_final_decision", width="stretch"):
+            run_main_command_and_refresh("decision-fusion")
 
     if not final_decision_df.empty:
         final_show_df = final_decision_df.copy()
@@ -1727,13 +1768,17 @@ def render_trade_plan_panel() -> None:
 
 
 def render_sell_signal_panel() -> None:
-    st.subheader("持仓卖点")
+    st.subheader("候选卖点信号")
+    st.caption("这里更新明日计划 A/B 候选股票的盘中卖点，固定持仓卖点在【准备工作 > 固定持仓】下方。")
+
+    if st.button("更新卖点信号", key="refresh_sell_signal_page", width="stretch"):
+        run_single_script_and_refresh("sell_signal_engine.py")
 
     if sell_signal_md:
         with st.expander("展开卖点信号原始报告", expanded=False):
             st.markdown(sell_signal_md)
     else:
-        st.warning("暂无卖点信号，有持仓时点击【更新卖点信号】。")
+        st.warning("暂无候选卖点信号，请先生成明日计划，再点击【更新卖点信号】。")
 
     sell_core_df = keep_columns(
         add_profit_probability(add_model_probability(sell_signal_df, model_prediction_df), profit_probability_df),
@@ -1750,7 +1795,7 @@ def render_sell_signal_panel() -> None:
         ],
     )
     sell_core_df = add_bought_flag(sell_core_df, bought_codes)
-    show_table("卖点核心信号", sell_core_df)
+    show_table("候选卖点核心信号", sell_core_df)
 
 
 def render_lunch_panel() -> None:
@@ -1853,6 +1898,11 @@ def render_next_day_panel() -> None:
     fixed_review_df, candidate_review_df = split_fixed_candidate(next_core_df)
     core_columns = [
         "系统验证结果",
+        "系统闭环结果",
+        "系统模拟利润",
+        "系统模拟买入价",
+        "系统模拟卖出价",
+        "系统模拟股数",
         "股票名称",
         "股票代码",
         "复盘结论",
@@ -2333,8 +2383,8 @@ def render_single_stock_panel() -> None:
 
 
 def render_opening_levels_panel() -> None:
-    st.subheader("开盘T区间")
-    st.caption("固定持仓先看这里：支撑位、压力位、买进区间、卖出区间。AI只做辅助解释，最终按行情和纪律执行。")
+    st.subheader("支撑压力")
+    st.caption("固定持仓的支撑位、压力位、买进区间、卖出区间；只展示可执行信息，计算过程折叠。")
 
     col1, col2, col3 = st.columns([1.1, 2.2, 1.1], vertical_alignment="bottom")
     with col1:
@@ -2343,7 +2393,7 @@ def render_opening_levels_panel() -> None:
     with col2:
         stock_text = st.text_input(
             "单票计算",
-            placeholder="输入股票名称或代码，例如 华友钴业 / 603799",
+            placeholder="输入股票名称或代码，例如 融捷股份 / 002192",
             label_visibility="collapsed",
         )
     with col3:
@@ -2355,7 +2405,7 @@ def render_opening_levels_panel() -> None:
         return
 
     show_table(
-        "固定持仓开盘支撑压力",
+        "支撑压力数据",
         keep_columns(
             opening_levels_df,
             [
@@ -2369,17 +2419,13 @@ def render_opening_levels_panel() -> None:
                 "集合竞价价",
                 "当前价",
                 "AI辅助",
-                "算法依据",
                 "历史T次数",
                 "历史T胜率",
-                "历史T均收益率",
-                "次日上涨概率",
-                "达到1%概率",
-                "止损概率",
                 "实时行情时间",
                 "状态",
             ],
         ),
+        height=320,
     )
 
     if opening_levels_md:
@@ -2387,33 +2433,323 @@ def render_opening_levels_panel() -> None:
             st.markdown(opening_levels_md)
 
 
-tab_opening, tab_plan, tab_holdings, tab_single_stock, tab_trade_records, tab_lunch, tab_next_day, tab_model_train, tab_model_predict = st.tabs([
-    "开盘T区间",
-    "明日计划",
-    "固定持仓",
-    "单票决策",
-    "交易记录",
-    "午盘验证",
-    "系统次日验证",
-    "模型训练",
-    "模型预测",
-])
+def render_t_mode_panel(page_title: str = "做T判断") -> None:
+    st.subheader(page_title)
+    st.caption("固定持仓先看这里：先判断今天做不做T，再看支撑压力和买卖区间。")
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stDataFrame"] div[role="gridcell"],
+        div[data-testid="stDataFrame"] div[role="columnheader"] {
+            font-size: 18px !important;
+            line-height: 1.45 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    refresh_col1, refresh_col2 = st.columns(2)
+    with refresh_col1:
+        if st.button("刷新做T判断", key="refresh_t_mode_decision", width="stretch"):
+            run_main_command_and_refresh("t-mode")
+    with refresh_col2:
+        if st.button("刷新支撑压力", key="refresh_t_mode_opening_levels", width="stretch"):
+            run_main_command_and_refresh("opening-levels")
+
+    if t_mode_decision_df.empty:
+        st.info("暂无做T模式，请先刷新开盘T区间和持仓买卖点。")
+    else:
+        show_table(
+            "做T模式列表",
+            keep_columns(
+                t_mode_decision_df,
+                [
+                    "推荐模式",
+                    "股票名称",
+                    "股票代码",
+                    "推荐强度",
+                    "模式短句",
+                    "买入区间",
+                    "卖出区间",
+                    "风险线",
+                    "触发条件",
+                    "一句话理由",
+                    "当前价",
+                    "金融预警",
+                    "历史T胜率",
+                    "数据状态",
+                ],
+            ),
+            height=300,
+        )
+
+    if not opening_levels_df.empty:
+        show_table(
+            "支撑压力参考",
+            keep_columns(
+                opening_levels_df,
+                [
+                    "操作",
+                    "股票名称",
+                    "股票代码",
+                    "支撑位",
+                    "压力位",
+                    "买进区间",
+                    "卖出区间",
+                    "当前价",
+                    "AI辅助",
+                    "实时行情时间",
+                ],
+            ),
+            height=260,
+        )
+
+    if t_mode_decision_md:
+        with st.expander("展开做T模式报告", expanded=False):
+            st.markdown(t_mode_decision_md)
 
 
-with tab_opening:
-    render_opening_levels_panel()
+def render_metal_macro_panel() -> None:
+    st.subheader("金属宏观")
+    st.caption("这里看黄金、白银、美元和利率压力，只做资源股和贵金属方向的辅助判断。")
+
+    if st.button("刷新金属宏观", key="refresh_metal_macro", width="stretch"):
+        run_main_command_and_refresh("metal-macro")
+
+    show_table(
+        "金属与利率联动",
+        keep_columns(
+            metal_macro_df,
+            [
+                "金属模块状态",
+                "黄金策略",
+                "利率压力",
+                "指标",
+                "数值",
+                "解释",
+                "一句话建议",
+                "数据状态",
+                "生成时间",
+            ],
+        ),
+    )
+
+    if metal_macro_md:
+        with st.expander("展开金属宏观报告", expanded=False):
+            st.markdown(metal_macro_md)
 
 
-with tab_plan:
-    with st.expander("今日市场与高级信息", expanded=False):
-        render_market_panel()
-        st.divider()
-        render_factor_panel()
+def render_preopen_prediction_panel() -> None:
+    st.subheader("开盘前预测")
+    st.caption("9:25 后看开盘评分和定性，判断今天先防守、只低吸，还是可进攻。")
 
-    render_trade_plan_panel()
+    if st.button("刷新开盘前预测", key="refresh_preopen_prediction", width="stretch"):
+        run_main_command_and_refresh("preopen-predict")
+
+    if preopen_prediction_df.empty:
+        st.info("暂无开盘前预测，请先刷新市场、开盘T区间和金属宏观。")
+        return
+
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    row = preopen_prediction_df.iloc[-1]
+    with metric_col1:
+        st.metric("开盘评分", row.get("开盘评分", "-"))
+    with metric_col2:
+        st.metric("开盘定性", row.get("开盘定性", "-"))
+    with metric_col3:
+        st.metric("今日策略", row.get("今日策略", "-"))
+    with metric_col4:
+        st.metric("金融预警", row.get("金融拉盘预警", "-"))
+
+    render_action_hint(
+        "怎么用",
+        "先看今日策略和金融预警；弱势就降仓位，只低吸不追高；强势再结合固定持仓和支撑压力执行。",
+    )
+    if any(col in preopen_prediction_df.columns for col in ["DS操作建议", "DS重点模块", "DS防守条件"]):
+        ds_row = preopen_prediction_df.iloc[-1]
+        render_action_hint("DS操作建议", str(ds_row.get("DS操作建议", "暂无")))
+        ds_col1, ds_col2 = st.columns(2)
+        with ds_col1:
+            render_action_hint("重点模块", str(ds_row.get("DS重点模块", "暂无")))
+        with ds_col2:
+            render_action_hint("防守条件", str(ds_row.get("DS防守条件", "暂无")))
+
+    show_table(
+        "开盘预测来源",
+        keep_columns(
+            preopen_prediction_df,
+            [
+                "开盘评分",
+                "开盘定性",
+                "金融拉盘预警",
+                "固定持仓影响",
+                "今日策略",
+                "DS补充观察",
+                "DS状态",
+                "评分来源",
+                "生成时间",
+            ],
+        ),
+    )
+
+    if preopen_prediction_md:
+        with st.expander("展开开盘前预测报告", expanded=False):
+            st.markdown(preopen_prediction_md)
 
 
-with tab_holdings:
+def render_sector_rotation_panel() -> None:
+    st.subheader("资金流向")
+    st.caption("只看最近板块资金强弱和固定持仓有没有资金支持；详细报告默认折叠。")
+
+    if st.button("刷新板块轮动", key="refresh_sector_rotation", width="stretch"):
+        run_main_command_and_refresh("sector-rotation")
+
+    display_df = add_billion_columns(sector_rotation_df)
+    if not display_df.empty:
+        inflow_df = display_df[pd.to_numeric(display_df.get("主力净流入", 0), errors="coerce").fillna(0) > 0].copy()
+        outflow_df = display_df[pd.to_numeric(display_df.get("主力净流入", 0), errors="coerce").fillna(0) < 0].copy()
+        metric_col1, metric_col2, metric_col3 = st.columns(3)
+        with metric_col1:
+            st.metric("流入板块", len(inflow_df))
+        with metric_col2:
+            st.metric("流出板块", len(outflow_df))
+        with metric_col3:
+            top_sector = str(display_df.iloc[0].get("所属板块", "-"))
+            st.metric("资金第一", top_sector)
+
+        ds_cols = ["DS盘面判断", "DS操作指引", "DS风险提示", "DS固定持仓提示"]
+        if any(col in display_df.columns for col in ds_cols):
+            ds_row = display_df.iloc[0]
+            render_action_hint("DS盘面判断", str(ds_row.get("DS盘面判断", "暂无")))
+            hint_col1, hint_col2, hint_col3 = st.columns(3)
+            with hint_col1:
+                render_action_hint("操作指引", str(ds_row.get("DS操作指引", "暂无")))
+            with hint_col2:
+                render_action_hint("风险提示", str(ds_row.get("DS风险提示", "暂无")))
+            with hint_col3:
+                render_action_hint("持仓提示", str(ds_row.get("DS固定持仓提示", "暂无")))
+
+        render_action_hint(
+            "怎么用",
+            "优先看资金前三名和固定持仓所属板块；若固定持仓板块没有资金支持，盘中只按纪律低吸或减仓。",
+        )
+
+    core_cols = [
+        "板块轮动状态",
+        "板块操作建议",
+        "所属板块",
+        "板块资金标签",
+        "资金排名",
+        "板块涨跌幅",
+        "主力净流入亿元",
+        "主力净流入占比",
+        "板块广度",
+        "板块近5日排名",
+        "DS状态",
+        "生成时间",
+    ]
+    ranked_df = keep_columns(display_df, core_cols)
+    if not ranked_df.empty:
+        show_table("板块轮动前三名", ranked_df.head(3), height=180)
+        tail_df = ranked_df.sort_values("资金排名", ascending=False, na_position="last").head(3)
+        show_table("板块轮动后三名", tail_df, height=180)
+    else:
+        show_table("板块轮动前三名", ranked_df)
+
+
+def render_performance_report_panel() -> None:
+    st.subheader("账面复盘")
+    st.caption("按日期筛选真实交易，生成复盘报表：赚了多少、收益率多少、买卖点还能怎么提高。")
+
+    if st.button("生成复盘报表", key="refresh_performance_report", width="stretch"):
+        run_main_command_and_refresh("performance-report")
+
+    current_trade_df = load_trade_records(TRADE_RECORD_FILE)
+    if current_trade_df.empty:
+        st.info("暂无交易记录，请先到【交易记录 > 日常记账】录入真实交易。")
+    else:
+        show_df = current_trade_df.copy()
+        show_df["_交易日期_dt"] = pd.to_datetime(show_df.get("交易日期", ""), errors="coerce").dt.date
+        valid_dates = show_df["_交易日期_dt"].dropna()
+        default_start = valid_dates.min() if not valid_dates.empty else None
+        default_end = valid_dates.max() if not valid_dates.empty else None
+
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            start_date = st.date_input("开始日期", value=default_start, key="performance_start_date")
+        with filter_col2:
+            end_date = st.date_input("结束日期", value=default_end, key="performance_end_date")
+
+        if start_date:
+            show_df = show_df[show_df["_交易日期_dt"] >= start_date]
+        if end_date:
+            show_df = show_df[show_df["_交易日期_dt"] <= end_date]
+
+        closed_df = show_df[show_df.get("闭环状态", pd.Series(dtype=str)).astype(str).eq("已闭环")].copy()
+        total_profit = pd.to_numeric(closed_df.get("到手利润", 0), errors="coerce").fillna(0).sum()
+        buy_amount = (
+            pd.to_numeric(closed_df.get("买入价格", 0), errors="coerce").fillna(0)
+            * pd.to_numeric(closed_df.get("数量", 0), errors="coerce").fillna(0)
+        ).sum()
+        return_rate = total_profit / buy_amount * 100 if buy_amount > 0 else 0
+
+        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        with metric_col1:
+            st.metric("交易笔数", len(show_df))
+        with metric_col2:
+            st.metric("已闭环", len(closed_df))
+        with metric_col3:
+            st.metric("到手利润", f"{total_profit:.2f}")
+        with metric_col4:
+            st.metric("收益率", f"{return_rate:.2f}%")
+
+        detail_tab, ds_tab = st.tabs(["复盘交易明细", "交易复盘结果"])
+        with detail_tab:
+            show_table(
+                "复盘交易明细",
+                keep_columns(
+                    show_df.sort_values("交易日期", ascending=False).drop(columns=["_交易日期_dt"], errors="ignore"),
+                    [
+                        "闭环状态",
+                        "股票名称",
+                        "股票代码",
+                        "交易类型",
+                        "方向",
+                        "买入价格",
+                        "卖出价格",
+                        "数量",
+                        "到手利润",
+                        "收益率",
+                        "买入手续费",
+                        "卖出手续费",
+                        "卖出印花税",
+                        "手续费合计",
+                        "交易日期",
+                        "策略来源",
+                        "是否按计划执行",
+                        "备注",
+                    ],
+                ),
+                height=420,
+            )
+
+        with ds_tab:
+            ds_df = performance_report_df[
+                performance_report_df.get("报表类型", pd.Series(dtype=str)).astype(str).eq("DS分析")
+            ].copy()
+            if ds_df.empty:
+                st.info("暂无 DS 交易复盘结果，请点击【生成复盘报表】。")
+            else:
+                for _, row in ds_df.iterrows():
+                    render_action_hint(str(row.get("指标", "DS分析")), str(row.get("数值", "")))
+
+    if performance_report_md:
+        with st.expander("展开周期复盘报告", expanded=False):
+            st.markdown(performance_report_md)
+
+
+def render_fixed_holding_panel() -> None:
     holding_col1, holding_col2, holding_col3 = st.columns(3)
 
     with holding_col1:
@@ -2435,35 +2771,384 @@ with tab_holdings:
         next_df=next_df,
         prediction_df=model_prediction_df,
     )
-    st.divider()
-    render_sell_signal_panel()
+    signal_df = load_csv(FIXED_HOLDINGS_SIGNAL_FILE)
+    if not signal_df.empty:
+        st.divider()
+        st.subheader("持仓买点卖点分析")
+        ds_cols = ["DS固定持仓判断", "DS固定持仓动作", "DS固定持仓风险"]
+        if any(col in signal_df.columns for col in ds_cols):
+            ds_row = signal_df.iloc[0]
+            render_action_hint("DS固定持仓判断", str(ds_row.get("DS固定持仓判断", "暂无")))
+            ds_col1, ds_col2 = st.columns(2)
+            with ds_col1:
+                render_action_hint("操作动作", str(ds_row.get("DS固定持仓动作", "暂无")))
+            with ds_col2:
+                render_action_hint("风险条件", str(ds_row.get("DS固定持仓风险", "暂无")))
+        show_table(
+            "买卖点明细",
+            keep_columns(
+                signal_df,
+                [
+                    "股票名称",
+                    "股票代码",
+                    "当前价",
+                    "当前涨幅",
+                    "买点状态",
+                    "买点下限",
+                    "买点上限",
+                    "卖点信号",
+                    "卖点理由",
+                    "次日上涨概率",
+                    "达到1%概率",
+                    "止损概率",
+                    "实时行情时间",
+                    "DS状态",
+                ],
+            ),
+            height=300,
+        )
 
 
-with tab_single_stock:
-    render_single_stock_panel()
-
-
-with tab_trade_records:
-    render_trade_record_panel()
-
-
-with tab_lunch:
+def render_lunch_workspace() -> None:
     if st.button("刷新午盘验证", key="tab_refresh_lunch", width="stretch"):
         run_single_script_and_refresh("lunch_validator.py")
 
     render_lunch_panel()
 
 
-with tab_next_day:
+def render_next_day_workspace() -> None:
     if st.button("刷新系统次日验证", key="tab_refresh_next_day", width="stretch"):
         run_single_script_and_refresh("next_day_validator.py")
 
     render_next_day_panel()
 
 
-with tab_model_train:
-    render_model_training_panel()
+def render_dataset_quality_panel() -> None:
+    st.subheader("数据集与质量")
+    if st.button("保存训练数据并刷新质量报告", key="refresh_dataset_quality", width="stretch"):
+        run_main_command_and_refresh("dataset")
+
+    (
+        dataset_samples_df,
+        feature_snapshot_df,
+        label_snapshot_df,
+        prediction_log_df,
+        model_predictions_df,
+    ) = load_dataset_frames()
+    render_dataset_metrics(
+        dataset_samples_df,
+        feature_snapshot_df,
+        label_snapshot_df,
+        prediction_log_df,
+        model_predictions_df,
+    )
+    if dataset_quality_md:
+        with st.expander("展开数据集质量报告", expanded=True):
+            st.markdown(dataset_quality_md)
+    show_table("样本主表预览", dataset_samples_df.head(30))
 
 
-with tab_model_predict:
-    render_model_prediction_panel()
+def build_validation_review_frame() -> pd.DataFrame:
+    fixed_codes = fixed_holding_codes()
+    frames = []
+
+    for source_name, frame in [
+        ("明日计划", final_df),
+        ("卖点信号", sell_signal_df),
+        ("午盘验证", lunch_df),
+        ("次日复盘", next_df),
+    ]:
+        if frame.empty or "股票代码" not in frame.columns:
+            continue
+
+        temp = mark_fixed_holdings(frame)
+        temp = temp[temp["股票代码"].astype(str).str.zfill(6).isin(fixed_codes)].copy()
+        if temp.empty:
+            continue
+
+        temp["数据来源"] = source_name
+        if "实时行情时间" in temp.columns:
+            temp["验证时间"] = temp["实时行情时间"]
+        elif "刷新时间" in temp.columns:
+            temp["验证时间"] = temp["刷新时间"]
+        elif "验证日期" in temp.columns:
+            temp["验证时间"] = temp["验证日期"]
+        else:
+            temp["验证时间"] = ""
+        frames.append(temp)
+
+    if not frames:
+        return pd.DataFrame()
+
+    review_df = pd.concat(frames, ignore_index=True)
+    review_df = add_profit_probability(add_model_probability(review_df, model_prediction_df), profit_probability_df)
+    review_df = add_final_decision(review_df, final_decision_df)
+    return add_short_reason(add_model_signal_status(add_verification_summary(review_df)))
+
+
+def render_validation_review_panel() -> None:
+    review_df = build_validation_review_frame()
+    if review_df.empty:
+        st.info("暂无固定持仓验证数据。")
+        return
+
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+    with filter_col1:
+        source_options = ["全部"] + sorted(review_df["数据来源"].dropna().astype(str).unique().tolist())
+        source_filter = st.selectbox("数据来源", source_options, key="validation_source_filter")
+    with filter_col2:
+        stock_filter = st.text_input("股票名称", placeholder="例如 大为", key="validation_stock_filter")
+    with filter_col3:
+        result_options = ["全部"] + sorted(
+            review_df.get("系统验证结果", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+        )
+        result_filter = st.selectbox("验证结果", result_options, key="validation_result_filter")
+    with filter_col4:
+        date_filter = st.text_input("验证时间", placeholder="例如 2026-09-03", key="validation_time_filter")
+
+    show_df = review_df.copy()
+    if source_filter != "全部":
+        show_df = show_df[show_df["数据来源"].astype(str).eq(source_filter)]
+    if stock_filter.strip():
+        show_df = show_df[show_df["股票名称"].astype(str).str.contains(stock_filter.strip(), case=False, na=False)]
+    if result_filter != "全部":
+        show_df = show_df[show_df["系统验证结果"].astype(str).eq(result_filter)]
+    if date_filter.strip():
+        show_df = show_df[show_df["验证时间"].astype(str).str.contains(date_filter.strip(), na=False)]
+
+    show_table(
+        "固定持仓验证数据",
+        keep_columns(
+            show_df,
+            [
+                "数据来源",
+                "验证时间",
+                "系统验证结果",
+                "最终操作",
+                "股票名称",
+                "股票代码",
+                "操作短句",
+                "卖出信号",
+                "卖出理由",
+                "午盘涨幅",
+                "复盘结论",
+                "分时确认状态",
+                "模型状态",
+            ],
+        ),
+        height=360,
+    )
+
+
+PAGE_CATALOG = [
+    {"一级菜单": "数据前瞻", "二级菜单": "隔日外盘", "状态": "待开发", "旧页面": "无", "功能": "隔夜外盘、美元、美债、商品期货等开盘前参考。"},
+    {"一级菜单": "数据前瞻", "二级菜单": "金银纵横", "状态": "已接入", "旧页面": "无", "功能": "金银比、金油比、美元和利率压力的资源方向辅助判断。"},
+    {"一级菜单": "数据前瞻", "二级菜单": "资金流向", "状态": "已接入", "旧页面": "今日市场 / 板块资金方向", "功能": "查看板块资金流入流出、主线延续和低位轮动。"},
+    {"一级菜单": "准备工作", "二级菜单": "盘前预测", "状态": "已接入", "旧页面": "无", "功能": "9:25 后给开盘评分、开盘定性和今日策略。"},
+    {"一级菜单": "准备工作", "二级菜单": "固定持仓", "状态": "已接入", "旧页面": "固定持仓", "功能": "集中查看固定持仓行情、买卖点、午盘和次日验证状态。"},
+    {"一级菜单": "准备工作", "二级菜单": "单票决策", "状态": "已接入", "旧页面": "单票决策", "功能": "临时输入一只股票，生成单票操作结论和模型依据。"},
+    {"一级菜单": "日内交易", "二级菜单": "做T判断", "状态": "已接入", "旧页面": "无", "功能": "判断固定持仓适合先买再卖、先卖再买，还是不做T。"},
+    {"一级菜单": "日内交易", "二级菜单": "支撑压力", "状态": "已接入", "旧页面": "开盘T区间", "功能": "计算固定持仓和单票的支撑、压力、买进区间、卖出区间。"},
+    {"一级菜单": "隔日持仓", "二级菜单": "明日计划", "状态": "已接入", "旧页面": "明日计划", "功能": "生成明日计划，分开展示固定持仓处理和 A/B 候选。"},
+    {"一级菜单": "隔日持仓", "二级菜单": "卖点信号", "状态": "已接入", "旧页面": "卖点信号 / 固定持仓", "功能": "查看和刷新持仓卖点，输出简短卖出理由。"},
+    {"一级菜单": "隔日持仓", "二级菜单": "午盘验证", "状态": "已接入", "旧页面": "午盘验证", "功能": "14:00 前后验证上午结构和下午处理建议。"},
+    {"一级菜单": "隔日持仓", "二级菜单": "次日复盘", "状态": "已接入", "旧页面": "系统次日验证", "功能": "复盘昨天计划是否有效，沉淀训练标签。"},
+    {"一级菜单": "交易记录", "二级菜单": "日常记账", "状态": "已接入", "旧页面": "交易记录", "功能": "记录和修改日内T / 隔日T交易，自动计算费用、印花税和收益。"},
+    {"一级菜单": "交易记录", "二级菜单": "账面复盘", "状态": "已接入", "旧页面": "无", "功能": "按周期统计真实做T收益、胜率和系统有效性。"},
+    {"一级菜单": "模型构建", "二级菜单": "数据获取-盘前预测", "状态": "已接入", "旧页面": "资金流向 / 盘前预测", "功能": "把资金流向和盘前预测结构化为模型输入标签。"},
+    {"一级菜单": "模型构建", "二级菜单": "数据获取-日内交易", "状态": "半接入", "旧页面": "交易记录", "功能": "目前复用真实交易记录，后续接入分钟级行情和做T路径标签。"},
+    {"一级菜单": "模型构建", "二级菜单": "数据获取-隔日持仓", "状态": "已接入", "旧页面": "保存训练数据 / 数据集质量", "功能": "保存隔日持仓训练数据并查看数据质量。"},
+    {"一级菜单": "模型构建", "二级菜单": "模型训练", "状态": "已接入", "旧页面": "模型训练", "功能": "训练方向、收益率、校准和解释相关模型。"},
+    {"一级菜单": "模型构建", "二级菜单": "模型预测", "状态": "已接入", "旧页面": "模型预测", "功能": "运行模型预测、概率校准、解释和预测回顾。"},
+    {"一级菜单": "模型构建", "二级菜单": "数据复盘", "状态": "已接入", "旧页面": "数据复盘 / 因子表现", "功能": "集中看今日模型报告、预测回顾、因子表现。"},
+]
+
+
+def build_menu_structure() -> dict[str, list[str]]:
+    menu: dict[str, list[str]] = {}
+    for page in PAGE_CATALOG:
+        menu.setdefault(page["一级菜单"], []).append(page["二级菜单"])
+    return menu
+
+
+MENU_STRUCTURE = build_menu_structure()
+PAGE_META = {page["二级菜单"]: page for page in PAGE_CATALOG}
+
+
+def render_missing_page(page_name: str, module_hint: str = "") -> None:
+    st.subheader(page_name)
+    st.warning(f"{page_name} 页面没有，待开发。")
+    if module_hint:
+        st.caption(module_hint)
+
+
+def render_preopen_data_page() -> None:
+    st.subheader("数据获取-盘前预测")
+    st.caption("这里不改数据，只把资金流向和盘前预测整理成模型可用标签。")
+    rows = []
+    if not preopen_prediction_df.empty:
+        row = preopen_prediction_df.iloc[-1]
+        rows.extend([
+            {"标签来源": "盘前预测", "标签名": "开盘定性", "标签值": row.get("开盘定性", ""), "用途": "判断日内仓位和做T强度"},
+            {"标签来源": "盘前预测", "标签名": "今日策略", "标签值": row.get("今日策略", ""), "用途": "指导做T或买卖点输入"},
+            {"标签来源": "盘前预测", "标签名": "金融拉盘预警", "标签值": row.get("金融拉盘预警", ""), "用途": "识别指数假强风险"},
+            {"标签来源": "盘前预测", "标签名": "DS操作建议", "标签值": row.get("DS操作建议", ""), "用途": "给模型保留自然语言决策摘要"},
+        ])
+    if not sector_rotation_df.empty:
+        sector_show = add_billion_columns(sector_rotation_df).head(5)
+        for _, row in sector_show.iterrows():
+            rows.append({
+                "标签来源": "资金流向",
+                "标签名": str(row.get("所属板块", "")),
+                "标签值": f"{row.get('板块轮动状态', '')}/{row.get('板块操作建议', '')}",
+                "用途": f"主力净流入{row.get('主力净流入亿元', '')}亿，校正板块权重",
+            })
+    label_df = pd.DataFrame(rows)
+    show_table("盘前模型输入标签", label_df, height=360)
+    if preopen_prediction_md:
+        with st.expander("展开盘前预测报告", expanded=False):
+            st.markdown(preopen_prediction_md)
+
+
+def render_intraday_data_page() -> None:
+    st.subheader("数据获取-日内交易")
+    st.caption("这里只看日内交易样本来源和质量，不在模型构建页修改交易记录。")
+    current_trade_df = load_trade_records(TRADE_RECORD_FILE)
+    if current_trade_df.empty:
+        st.info("暂无日内交易样本，请先到【交易记录 > 日常记账】录入真实交易。")
+        return
+
+    intraday_df = current_trade_df[current_trade_df["交易类型"].astype(str).eq("日内T")].copy()
+    closed_df = intraday_df[intraday_df["闭环状态"].astype(str).eq("已闭环")].copy()
+    profit_series = pd.to_numeric(closed_df.get("到手利润", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    with metric_col1:
+        st.metric("日内T样本", len(intraday_df))
+    with metric_col2:
+        st.metric("闭环样本", len(closed_df))
+    with metric_col3:
+        st.metric("盈利样本", int((profit_series > 0).sum()))
+    with metric_col4:
+        st.metric("到手利润", f"{profit_series.sum():.2f}")
+
+    show_table(
+        "日内交易样本",
+        keep_columns(
+            intraday_df.sort_values("交易日期", ascending=False),
+            [
+                "交易日期",
+                "股票名称",
+                "股票代码",
+                "方向",
+                "买入价格",
+                "卖出价格",
+                "数量",
+                "到手利润",
+                "收益率",
+                "策略来源",
+                "是否按计划执行",
+                "闭环状态",
+            ],
+        ).head(40),
+        height=420,
+    )
+
+
+def render_overnight_data_page() -> None:
+    st.subheader("数据获取-隔日持仓")
+    st.caption("隔日持仓数据相当于系统模拟盘：系统给买点卖点，你的真实交易用于校准执行效果。")
+    if st.button("保存隔日持仓训练数据", key="save_overnight_dataset", width="stretch"):
+        run_main_command_and_refresh("dataset")
+    if dataset_quality_md:
+        with st.expander("展开数据集质量报告", expanded=True):
+            st.markdown(dataset_quality_md)
+    else:
+        st.info("暂无数据集质量报告，请先保存训练数据。")
+
+
+def render_data_review_page() -> None:
+    st.subheader("数据复盘")
+    st.caption("这里集中查看验证数据、预测回顾、今日模型报告、因子表现和数据集质量。")
+    if st.button("刷新数据复盘", key="refresh_data_review", width="stretch"):
+        run_main_command_and_refresh("prediction-review")
+    render_validation_review_panel()
+    if daily_model_report_md:
+        with st.expander("展开今日模型与预测复盘报告", expanded=True):
+            st.markdown(daily_model_report_md)
+    if prediction_review_report_md:
+        with st.expander("展开预测回顾报告", expanded=False):
+            st.markdown(prediction_review_report_md)
+    render_factor_panel()
+
+
+PAGE_RENDERERS = {
+    "隔日外盘": lambda: render_missing_page("隔日外盘", "需要后续接入美股、日韩指数、美元、美债、商品期货等隔夜数据。"),
+    "金银纵横": render_metal_macro_panel,
+    "资金流向": render_sector_rotation_panel,
+    "盘前预测": render_preopen_prediction_panel,
+    "固定持仓": render_fixed_holding_panel,
+    "单票决策": render_single_stock_panel,
+    "做T判断": render_t_mode_panel,
+    "支撑压力": lambda: render_t_mode_panel("支撑压力"),
+    "明日计划": render_trade_plan_panel,
+    "卖点信号": render_sell_signal_panel,
+    "午盘验证": render_lunch_workspace,
+    "次日复盘": render_next_day_workspace,
+    "日常记账": render_trade_record_panel,
+    "账面复盘": render_performance_report_panel,
+    "数据获取-盘前预测": render_preopen_data_page,
+    "数据获取-日内交易": render_intraday_data_page,
+    "数据获取-隔日持仓": render_overnight_data_page,
+    "模型训练": render_model_training_panel,
+    "模型预测": render_model_prediction_panel,
+    "数据复盘": render_data_review_page,
+}
+
+
+def flatten_menu_pages() -> list[str]:
+    pages = []
+    for children in MENU_STRUCTURE.values():
+        pages.extend(children)
+    return pages
+
+
+def render_sidebar_menu() -> str:
+    with st.sidebar:
+        st.title("实盘工作台")
+        st.caption("按操作顺序展开一级菜单，点击二级菜单进入页面。")
+
+        if sac is not None:
+            items = []
+            for primary, children in MENU_STRUCTURE.items():
+                items.append(
+                    sac.MenuItem(
+                        primary,
+                        children=[sac.MenuItem(child) for child in children],
+                    )
+                )
+            selected = sac.menu(
+                items,
+                open_all=False,
+                open_index=[0],
+                index=0,
+                size="md",
+                variant="left-bar",
+                color="red",
+                key="main_operation_menu",
+            )
+            if selected in PAGE_RENDERERS:
+                return selected
+            return MENU_STRUCTURE["数据前瞻"][0]
+
+        st.info("未安装 streamlit-antd-components，当前使用原生菜单降级显示。")
+        primary_page = st.radio("一级菜单", list(MENU_STRUCTURE.keys()))
+        return st.radio("二级菜单", MENU_STRUCTURE[primary_page])
+
+
+debug_page = st.query_params.get("page", "")
+selected_page = debug_page if debug_page in PAGE_RENDERERS else render_sidebar_menu()
+selected_meta = PAGE_META.get(selected_page, {})
+if selected_meta:
+    st.caption(f"{selected_meta['一级菜单']} > {selected_meta['二级菜单']} · {selected_meta['状态']}")
+    st.divider()
+PAGE_RENDERERS.get(selected_page, lambda: render_missing_page(selected_page))()

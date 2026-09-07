@@ -23,7 +23,7 @@ pip install -r requirements.txt
 - `dataset`：SQLite 样本库位置、CSV 导出目录、切分目录。
 - `llm_labeling`：大模型辅助标签开关、国产供应商优先级、成本上限和 API Key 环境变量。
 
-PushPlus token 当前沿用既有代码逻辑，可通过环境变量 `PUSHPLUS_TOKEN` 覆盖。
+PushPlus token 只通过环境变量 `PUSHPLUS_TOKEN` 配置，避免把推送密钥写进代码。
 
 ## 命令行运行
 

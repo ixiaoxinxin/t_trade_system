@@ -40,6 +40,31 @@ COMMANDS = {
         "runner": ("opening_levels", "run_opening_levels"),
         "outputs": ["output/opening_levels.csv", "output/opening_levels.md"],
     },
+    "t-mode": {
+        "description": "生成固定持仓做T模式决策",
+        "runner": ("t_mode_decision", "run_t_mode_decision"),
+        "outputs": ["output/t_mode_decision.csv", "output/t_mode_decision.md"],
+    },
+    "metal-macro": {
+        "description": "生成金属与利率联动预测",
+        "runner": ("metal_macro_engine", "run_metal_macro"),
+        "outputs": ["output/metal_macro_snapshot.csv", "output/metal_macro_report.md"],
+    },
+    "preopen-predict": {
+        "description": "生成开盘前综合预测",
+        "runner": ("preopen_predictor", "run_preopen_prediction"),
+        "outputs": ["output/preopen_prediction.csv", "output/preopen_prediction.md"],
+    },
+    "sector-rotation": {
+        "description": "生成大资金板块轮动报告",
+        "runner": ("sector_rotation", "run_sector_rotation"),
+        "outputs": ["output/sector_rotation.csv", "output/sector_rotation_report.md"],
+    },
+    "performance-report": {
+        "description": "生成周/月/半年/年度复盘报表",
+        "runner": ("performance_report", "run_performance_report"),
+        "outputs": ["output/performance_report.csv", "output/performance_report.md"],
+    },
     "lunch": {
         "description": "生成午盘验证报告",
         "runner": ("lunch_validator", "run_lunch_validation"),
