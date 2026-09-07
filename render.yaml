@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: t-trade-system
+    name: t-trade-workbench
     runtime: docker
     plan: starter
     autoDeploy: true

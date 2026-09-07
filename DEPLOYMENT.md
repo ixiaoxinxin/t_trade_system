@@ -4,6 +4,10 @@
 
 当前系统是 Streamlit + Python 服务，线上推荐使用 Render Docker Web Service。
 
+推荐服务名：`t-trade-workbench`
+
+预期访问地址：`https://t-trade-workbench.onrender.com`
+
 部署后容器会同时启动：
 
 - `streamlit run app.py`：提供 iPad 可访问的实盘工作台页面。
