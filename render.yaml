@@ -2,7 +2,7 @@ services:
   - type: web
     name: t-trade-workbench
     runtime: docker
-    plan: starter
+    plan: free
     autoDeploy: true
     healthCheckPath: /
     envVars:
