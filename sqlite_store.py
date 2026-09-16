@@ -136,7 +136,30 @@ def migrate_csv_file(conn: sqlite3.Connection, path: Path) -> int:
     if not table_name or not path.exists():
         return 0
 
-    df = pd.read_csv(path, dtype={"股票代码": str})
+    if path.stat().st_size == 0:
+        record_migration(
+            conn,
+            source_path=path,
+            target_table=table_name,
+            data_type="empty_csv",
+            row_count=0,
+            content_hash=file_hash(path),
+        )
+        return 0
+
+    try:
+        df = pd.read_csv(path, dtype={"股票代码": str})
+    except pd.errors.EmptyDataError:
+        record_migration(
+            conn,
+            source_path=path,
+            target_table=table_name,
+            data_type="empty_csv",
+            row_count=0,
+            content_hash=file_hash(path),
+        )
+        return 0
+
     df = normalize_dataframe(df)
     df.to_sql(table_name, conn, if_exists="replace", index=False)
     record_migration(
@@ -233,6 +256,7 @@ def migrate_local_files_to_sqlite(db_path: Path = DATABASE_FILE) -> dict[str, An
     summary: dict[str, Any] = {
         "database": str(db_path),
         "output_csv_files": 0,
+        "empty_output_csv_files": 0,
         "documents": 0,
         "daily_cache_files": 0,
         "daily_cache_rows": 0,
@@ -248,8 +272,11 @@ def migrate_local_files_to_sqlite(db_path: Path = DATABASE_FILE) -> dict[str, An
             if path.name == "trade_records.csv":
                 continue
 
-            migrate_csv_file(conn, path)
-            summary["output_csv_files"] += 1
+            migrated_rows = migrate_csv_file(conn, path)
+            if path.stat().st_size == 0:
+                summary["empty_output_csv_files"] += 1
+            else:
+                summary["output_csv_files"] += 1
 
         for path in sorted(OUTPUT_DIR.iterdir()) if OUTPUT_DIR.exists() else []:
             if path.suffix in DOCUMENT_EXTENSIONS:

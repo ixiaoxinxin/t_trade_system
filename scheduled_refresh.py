@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from sqlite_store import migrate_local_files_to_sqlite
+
 
 STATE_FILE = Path("output/scheduled_refresh_status.json")
 LOG_DIR = Path("logs")
@@ -43,6 +45,7 @@ SCHEDULED_JOBS = [
             "t-mode",
             "holdings-signals",
             "sell",
+            "lunch",
         ],
     },
     {
@@ -86,6 +89,7 @@ SCHEDULED_JOBS = [
             "t-mode",
             "holdings-signals",
             "sell",
+            "lunch",
         ],
     },
     {
@@ -97,6 +101,7 @@ SCHEDULED_JOBS = [
             "t-mode",
             "holdings-signals",
             "sell",
+            "lunch",
         ],
     },
     {
@@ -109,6 +114,7 @@ SCHEDULED_JOBS = [
             "t-mode",
             "holdings-signals",
             "sell",
+            "lunch",
             "sector-rotation",
         ],
     },
@@ -277,6 +283,12 @@ def run_main_command(command: str) -> dict[str, Any]:
             append_log(result.stdout[-4000:])
         if result.stderr:
             append_log(result.stderr[-4000:])
+
+        if success:
+            try:
+                migrate_local_files_to_sqlite()
+            except Exception as exc:
+                append_log(f"[{now_text()}] sqlite migration skipped after {command}: {exc}")
 
         return {
             "command": command,
