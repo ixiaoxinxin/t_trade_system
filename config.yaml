@@ -49,13 +49,14 @@ dataset:
   split_dir: data/dataset/splits
 
 llm_labeling:
-  enabled: false
+  enabled: true
   provider_priority:
     - deepseek
     - doubao
     - qwen
     - glm
-  max_daily_cost_cny: 20
+  max_daily_cost_cny: 5
+  sample_limit: 3
   min_confidence: 0.7
   prompt_version: v2.5-labeling-001
   request_timeout_seconds: 20

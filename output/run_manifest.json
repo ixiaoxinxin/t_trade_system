@@ -1,25 +1,27 @@
 {
   "product_version": "2.0",
-  "generated_at": "2026-07-19 18:12:49",
-  "command": "holdings-signals",
+  "generated_at": "2026-09-07 10:48:23",
+  "command": "opening-levels",
   "config_summary": {
     "max_count": null,
     "stock_code": null
   },
   "steps": [
     {
-      "name": "holdings-signals",
-      "description": "刷新固定持仓买点与卖点",
+      "name": "opening-levels",
+      "description": "生成固定持仓开盘支撑压力与T区间",
       "success": true,
-      "started_at": "2026-07-19 18:12:48",
-      "finished_at": "2026-07-19 18:12:49",
+      "started_at": "2026-09-07 10:48:19",
+      "finished_at": "2026-09-07 10:48:23",
       "outputs": [
-        "output/fixed_holdings_signals.csv"
+        "output/opening_levels.csv",
+        "output/opening_levels.md"
       ]
     }
   ],
   "outputs": [
-    "output/fixed_holdings_signals.csv"
+    "output/opening_levels.csv",
+    "output/opening_levels.md"
   ],
   "success": true
 }

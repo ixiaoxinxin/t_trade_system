@@ -1,6 +1,6 @@
 # v2.7 +1%/+2% 概率模型评估报告
 
-生成时间：2026-07-19 19:54:47
+生成时间：2026-08-25 10:40:42
 模型版本：`v2.7-profit-probability-001`
 模型文件：`data/models/profit_probability_model_v2.7.pkl`
 
@@ -8,35 +8,29 @@
 
 | 目标 | 数据集 | 样本数 | 正样本率 | AUC | PR-AUC | Brier | 准确率 | 算法 |
 |---|---|---:|---:|---:|---:|---:|---:|---|
-| 触达后达到+1% | train | 12 | 91.67% | - | - | - | - | `baseline_probability` |
-| 触达后达到+1% | validation | 3 | 0.00% | - | - | - | - | `baseline_probability` |
-| 触达后达到+1% | test | 3 | 100.00% | - | - | - | - | `baseline_probability` |
-| 触达后达到+2% | train | 12 | 83.33% | - | - | - | - | `baseline_probability` |
-| 触达后达到+2% | validation | 3 | 0.00% | - | - | - | - | `baseline_probability` |
-| 触达后达到+2% | test | 3 | 0.00% | - | - | - | - | `baseline_probability` |
-| 触达后触发-2%止损 | train | 12 | 16.67% | - | - | - | - | `baseline_probability` |
-| 触达后触发-2%止损 | validation | 3 | 0.00% | - | - | - | - | `baseline_probability` |
-| 触达后触发-2%止损 | test | 3 | 66.67% | - | - | - | - | `baseline_probability` |
+| 触达后达到+1% | train | 25 | 40.00% | - | - | - | - | `baseline_probability` |
+| 触达后达到+1% | validation | 0 | 0.00% | - | - | - | - | `baseline_probability` |
+| 触达后达到+1% | test | 0 | 0.00% | - | - | - | - | `baseline_probability` |
+| 触达后达到+2% | train | 25 | 8.00% | - | - | - | - | `baseline_probability` |
+| 触达后达到+2% | validation | 0 | 0.00% | - | - | - | - | `baseline_probability` |
+| 触达后达到+2% | test | 0 | 0.00% | - | - | - | - | `baseline_probability` |
+| 触达后触发-2%止损 | train | 25 | 20.00% | - | - | - | - | `baseline_probability` |
+| 触达后触发-2%止损 | validation | 0 | 0.00% | - | - | - | - | `baseline_probability` |
+| 触达后触发-2%止损 | test | 0 | 0.00% | - | - | - | - | `baseline_probability` |
 
 ## 二、测试集分市场表现
 
 ### 触达后达到+1%
 
-| 市场环境 | 样本数 | 命中率 |
-|---|---:|---:|
-| 情绪冰点 | 3 | 100.00% |
+暂无可统计数据。
 
 ### 触达后达到+2%
 
-| 市场环境 | 样本数 | 命中率 |
-|---|---:|---:|
-| 情绪冰点 | 3 | 0.00% |
+暂无可统计数据。
 
 ### 触达后触发-2%止损
 
-| 市场环境 | 样本数 | 命中率 |
-|---|---:|---:|
-| 情绪冰点 | 3 | 33.33% |
+暂无可统计数据。
 
 ## 三、使用说明
 

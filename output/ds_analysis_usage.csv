@@ -1,0 +1,9 @@
+﻿usage_id,provider,model,prompt_version,input_tokens,output_tokens,cost_estimate_cny,status,created_at
+1788496801192_b19c1ef0_deepseek_success,deepseek,deepseek-chat,v4.01_sector_rotation_ds,918,143,0.002927,success,2026-09-04 12:40:01
+1788504482039_17bda279_deepseek_success,deepseek,deepseek-chat,v4.01_sector_rotation_ds,918,154,0.003014,success,2026-09-04 14:48:02
+1788504717929_e5c6ade1_deepseek_success,deepseek,deepseek-chat,v4.01_preopen_prediction_ds,916,64,0.002295,success,2026-09-04 14:51:57
+1788504866479_3c95d724_deepseek_success,deepseek,deepseek-chat,v4.01_performance_report_ds,3312,112,0.007349,success,2026-09-04 14:54:26
+1788505784283_1ce83cc6_deepseek_success,deepseek,deepseek-chat,v4.01_sector_rotation_ds,918,138,0.002887,success,2026-09-04 15:09:44
+1788511798473_1388ee3d_deepseek_success,deepseek,deepseek-chat,v4.02_fixed_holding_signal_ds,571,41,0.001439,success,2026-09-04 16:49:58
+1788744383213_0fb0e00f_deepseek_success,deepseek,deepseek-chat,v4.01_sector_rotation_ds,852,151,0.002862,success,2026-09-07 09:26:23
+1788744494211_855e499c_deepseek_success,deepseek,deepseek-chat,v4.02_fixed_holding_signal_ds,555,47,0.001456,success,2026-09-07 09:28:14
